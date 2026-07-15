@@ -248,7 +248,7 @@
                 if (isDemoMode) {
                     let newInv = [...inventory];
                     if (currentItem) {
-                        newInv = newInv.map(i => i.id === currentItem.id ? { id: currentItem.id, ...itemData } : i);
+                        newInv = newInv.map(i => i.id === currentItem.id ? { ...i, ...itemData, quantity: i.quantity } : i);
                     } else {
                         newInv.push({ id: Date.now().toString(), ...itemData });
                     }
@@ -257,7 +257,9 @@
                 } else if (db) {
                     try {
                         if (currentItem) {
-                            await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', currentItem.id), itemData);
+                            // BUG FIX 2: Destructure quantity out during edits to protect multi-device overrides
+                            const { quantity, ...updateFields } = itemData;
+                            await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', currentItem.id), updateFields);
                         } else {
                             const newId = Date.now().toString();
                             await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', newId), { id: newId, ...itemData });
@@ -291,7 +293,10 @@
                 e.preventDefault();
                 if (!user || user.isAnonymous || !movementItem) return;
 
-                const currentQty = movementItem.quantity || 0;
+                // BUG FIX 1: Fetch fresh quantity directly from the real-time active state array
+                const liveFreshItem = inventory.find(i => i.id === movementItem.id);
+                const currentQty = liveFreshItem ? (liveFreshItem.quantity || 0) : (movementItem.quantity || 0);
+                
                 const change = parseInt(movementQuantity) || 0;
                 const newQuantity = movementType === 'in' ? currentQty + change : Math.max(0, currentQty - change);
 
@@ -350,14 +355,12 @@
             const dailyReport = getDailyMetrics();
             const lowStockCount = inventory.filter(item => item.quantity <= 5).length;
 
-            // Excel Downloader Engine Function
             const exportToExcel = () => {
                 if (dailyReport.transactions.length === 0) {
                     alert("No operation logs captured for today to map into an Excel document.");
                     return;
                 }
 
-                // Map clean, row data array for Excel conversion
                 const excelRows = dailyReport.transactions.map((tx) => ({
                     "Timestamp": new Date(tx.timestamp).toLocaleTimeString(),
                     "Product Name": tx.itemName,
@@ -365,22 +368,19 @@
                     "Action Type": tx.type === 'in' ? 'Inward Ingest' : 'Outward Sale',
                     "Delta Quantity": tx.quantity,
                     "Unit Cost ($)": tx.price,
-                    "Total Value Cross ($)": parseFloat((tx.totalValue || (tx.quantity * tx.price)).toFixed(2))
+                    "Total Value ($)": parseFloat((tx.totalValue || (tx.quantity * tx.price)).toFixed(2))
                 }));
 
-                // Append empty parsing spacing row followed by system metrics logs summary card metrics arrays
                 excelRows.push({}); 
-                excelRows.push({ "Timestamp": "SUMMARY DATA SPECIFICATION LEDGER" });
+                excelRows.push({ "Timestamp": "SUMMARY DATA LEDGER" });
                 excelRows.push({ "Timestamp": "Total Combined Daily Revenue ($)", "Product Name": parseFloat(dailyReport.dailyRevenue.toFixed(2)) });
                 excelRows.push({ "Timestamp": "Total Volume Sold Outward (Units)", "Product Name": dailyReport.totalOutwardSales });
                 excelRows.push({ "Timestamp": "Total Volume Ingested Inward (Units)", "Product Name": dailyReport.totalInward });
 
-                // Construct spreadsheet entity instances safely via SheetJS utils
                 const worksheet = XLSX.utils.json_to_sheet(excelRows);
                 const workbook = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(workbook, worksheet, "Daily Ledger Feed");
 
-                // Download execution pipeline trigger
                 const todayString = new Date().toISOString().split('T')[0];
                 XLSX.writeFile(workbook, `BhaktiStock_Daily_Report_${todayString}.xlsx`);
             };
@@ -408,4 +408,4 @@
 
                             {loginError && (
                                 <div className="p-4 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl flex items-center gap-2">
-                                    <Icon name="AlertCircle" size={16} className="text-re
+                     
