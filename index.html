@@ -143,7 +143,7 @@
 
                 if (!db) return;
 
-                // FIXED: Removed 'users' and 'user.uid' to allow multi-device sharing
+                // Shared multi-device reference path
                 const inventoryRef = window.FB.collection(db, 'artifacts', appId, 'inventory');
                 const unsubscribeInv = window.FB.onSnapshot(inventoryRef, (snapshot) => {
                     const items = [];
@@ -155,7 +155,7 @@
                     setIsLoading(false);
                 });
 
-                // FIXED: Removed 'users' and 'user.uid' to allow multi-device sharing
+                // Shared multi-device reference path
                 const txRef = window.FB.collection(db, 'artifacts', appId, 'transactions');
                 const unsubscribeTx = window.FB.onSnapshot(txRef, (snapshot) => {
                     const txs = [];
@@ -198,11 +198,9 @@
                 } else if (db) {
                     try {
                         if (currentItem) {
-                            // FIXED PATH
                             await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', currentItem.id), itemData);
                         } else {
                             const newId = Date.now().toString();
-                            // FIXED PATH
                             await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', newId), { id: newId, ...itemData });
                         }
                     } catch (err) {
@@ -221,7 +219,6 @@
                     localStorage.setItem('mobistock_inv', JSON.stringify(newInv));
                 } else if (db) {
                     try {
-                        // FIXED PATH
                         await window.FB.deleteDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', id));
                     } catch (err) {
                         console.error("Delete error:", err);
@@ -330,4 +327,8 @@
                     )}
                 </div>
             );
-        
+        } // Added missing closing brace for the App function component here
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+                            </script>
