@@ -75,16 +75,14 @@
         };
 
         // 🔥 ADD YOUR FIREBASE CONFIGURATION HERE 🔥
-        // If deploying outside this editor (like GitHub Pages), replace this object 
-        // with your actual config from the Firebase Console (Project Settings > General > Your apps).
         const manualFirebaseConfig = {
-            apiKey: "AIzaSyBu1kxGU6-JtHlyfT2qDaaznTOD8gMZQDI",
-            authDomain: "bhakti-mobile-eaeff.firebaseapp.com",
-            projectId: "bhakti-mobile-eaeff",
-            storageBucket: "bhakti-mobile-eaeff.firebasestorage.app",
-            messagingSenderId: "626681125968",
-            appId: "1:626681125968:web:1daac833ab01b23db78555",
-            measurementId: "G-3GY224Y1Z6"
+            apiKey: "AIzaSyCkWXVNjDVfLk9xllTD3IsXMwnbyvQeNrE",
+            authDomain: "bhakti-stock.firebaseapp.com",
+            projectId: "bhakti-stock",
+            storageBucket: "bhakti-stock.firebasestorage.app",
+            messagingSenderId: "1027335051516",
+            appId: "1:1027335051516:web:46fb07f9f744ec12a69f79",
+            measurementId: "G-T2P45ZE381"
         };
 
         const firebaseConfig = typeof __firebase_config !== "undefined" ? JSON.parse(__firebase_config) : manualFirebaseConfig;
@@ -118,14 +116,27 @@
             const [db, setDb] = useState(null);
             const [auth, setAuth] = useState(null);
 
-            // Wait for Firebase module to load globally
+            // Wait for Firebase module to load globally & Initialize App SAFELY
             useEffect(() => {
-                if (window.FB) {
+                const setupFirebase = () => {
+                    if (!isDemoMode && window.FB) {
+                        try {
+                            const app = window.FB.initializeApp(firebaseConfig);
+                            setAuth(window.FB.getAuth(app));
+                            setDb(window.FB.getFirestore(app));
+                        } catch (err) {
+                            console.log("Firebase initialized"); // Catch duplicate app errors silently
+                        }
+                    }
                     setFbLoaded(true);
+                };
+
+                if (window.FB) {
+                    setupFirebase();
                 } else {
                     const timer = setInterval(() => {
                         if (window.FB) {
-                            setFbLoaded(true);
+                            setupFirebase();
                             clearInterval(timer);
                         }
                     }, 50);
@@ -133,16 +144,9 @@
                 }
             }, []);
 
+            // Handle Authentication and App events separately
             useEffect(() => {
                 if (!fbLoaded) return;
-
-                if (!isDemoMode && window.FB) {
-                    const app = window.FB.initializeApp(firebaseConfig);
-                    const authInstance = window.FB.getAuth(app);
-                    const dbInstance = window.FB.getFirestore(app);
-                    setAuth(authInstance);
-                    setDb(dbInstance);
-                }
 
                 window.addEventListener('beforeinstallprompt', (e) => {
                     e.preventDefault();
@@ -178,8 +182,9 @@
                     const unsubscribe = window.FB.onAuthStateChanged(auth, setUser);
                     return () => unsubscribe();
                 }
-            }, [auth, fbLoaded]);
+            }, [fbLoaded, auth]);
 
+            // Database syncing
             useEffect(() => {
                 if (!user || (!isDemoMode && !fbLoaded)) return;
                 
