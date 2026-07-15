@@ -74,9 +74,22 @@
             return <span ref={containerRef} className="contents" style={{ display: 'contents' }} />;
         };
 
-        const firebaseConfig = typeof __firebase_config !== "undefined" ? JSON.parse(__firebase_config) : { apiKey: "YOUR_API_KEY" };
+        // 🔥 ADD YOUR FIREBASE CONFIGURATION HERE 🔥
+        // If deploying outside this editor (like GitHub Pages), replace this object 
+        // with your actual config from the Firebase Console (Project Settings > General > Your apps).
+        const manualFirebaseConfig = {
+            apiKey: "AIzaSyBu1kxGU6-JtHlyfT2qDaaznTOD8gMZQDI",
+            authDomain: "bhakti-mobile-eaeff.firebaseapp.com",
+            projectId: "bhakti-mobile-eaeff",
+            storageBucket: "bhakti-mobile-eaeff.firebasestorage.app",
+            messagingSenderId: "626681125968",
+            appId: "1:626681125968:web:1daac833ab01b23db78555",
+            measurementId: "G-3GY224Y1Z6"
+        };
+
+        const firebaseConfig = typeof __firebase_config !== "undefined" ? JSON.parse(__firebase_config) : manualFirebaseConfig;
         const appId = typeof __app_id !== "undefined" ? __app_id : "mobistock-default";
-        const isDemoMode = firebaseConfig.apiKey === "YOUR_API_KEY" || !firebaseConfig.apiKey;
+        const isDemoMode = firebaseConfig.apiKey === "YOUR_API_KEY_HERE" || !firebaseConfig.apiKey;
 
         function App() {
             const [inventory, setInventory] = useState([]);
@@ -348,9 +361,17 @@
                         </div>
                         <div>
                         <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Category</label>
-                        <select name="category" defaultValue={currentItem?.category || 'Smartphones'} className="w-full px-4 py-3 bg-gray-50 border-0 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none transition-all appearance-none">
-                            {allCategories.filter(Boolean).map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                        </select>
+                        <input 
+                            name="category" 
+                            list="category-options" 
+                            defaultValue={currentItem?.category || 'Smartphones'} 
+                            placeholder="Type or select a category"
+                            required
+                            className="w-full px-4 py-3 bg-gray-50 border-0 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none transition-all" 
+                        />
+                        <datalist id="category-options">
+                            {allCategories.filter(Boolean).map(cat => <option key={cat} value={cat} />)}
+                        </datalist>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                         <div>
