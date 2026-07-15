@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>BhaktiStock</title>
+    <title>BhaktiStock - Admin Portal</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -24,17 +24,19 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
     <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body class="bg-gray-100 font-sans text-gray-900 selection:bg-blue-200">
     <div id="root"></div>
 
     <script type="module">
         import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         window.FB = {
-            initializeApp, getApps, getApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
+            initializeApp, getApps, getApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signInWithEmailAndPassword, signOut,
             getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot
         };
     </script>
@@ -80,16 +82,18 @@
             const [transactions, setTransactions] = useState([]);
             const [user, setUser] = useState(null);
             const [isLoading, setIsLoading] = useState(true);
-            const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' or 'report'
+            const [activeTab, setActiveTab] = useState('inventory'); 
             
             const [isItemModalOpen, setIsItemModalOpen] = useState(false);
             const [currentItem, setCurrentItem] = useState(null);
 
-            // Stock Movement States
             const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
             const [movementItem, setMovementItem] = useState(null);
-            const [movementType, setMovementType] = useState('in'); // 'in' (Inward) or 'out' (Outward/Sale)
+            const [movementType, setMovementType] = useState('in'); 
             const [movementQuantity, setMovementQuantity] = useState(1);
+
+            const [loginError, setLoginError] = useState('');
+            const [isLoggingIn, setIsLoggingIn] = useState(false);
             
             const [fbLoaded, setFbLoaded] = useState(false);
             const [db, setDb] = useState(null);
@@ -115,30 +119,31 @@
 
             useEffect(() => {
                 if (!fbLoaded) return;
-                if (isDemoMode) { setUser({ uid: 'local-demo-user' }); return; }
+                if (isDemoMode) { 
+                    setUser({ uid: 'local-demo-user', isAnonymous: true }); 
+                    setIsLoading(false); 
+                    return; 
+                }
 
                 if (window.FB && auth) {
-                    const initAuth = async () => {
-                        try {
-                            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                                await window.FB.signInWithCustomToken(auth, __initial_auth_token);
-                            } else {
+                    const unsubscribe = window.FB.onAuthStateChanged(auth, async (currentUser) => {
+                        if (!currentUser) {
+                            try {
                                 await window.FB.signInAnonymously(auth);
+                            } catch (err) {
+                                console.error("Anonymous connection failed:", err);
                             }
-                        } catch (error) {
-                            console.error("Auth error:", error);
-                            setUser({ uid: 'local-fallback-user' }); 
+                        } else {
+                            setUser(currentUser);
+                            setIsLoading(false);
                         }
-                    };
-                    initAuth();
-                    const unsubscribe = window.FB.onAuthStateChanged(auth, setUser);
+                    });
                     return () => unsubscribe();
                 }
             }, [fbLoaded, auth]);
 
-            // Real-Time Syncing (Shared across devices)
             useEffect(() => {
-                if (!user || (!isDemoMode && !fbLoaded)) return;
+                if (!user || user.isAnonymous || (!isDemoMode && !fbLoaded)) return;
                 
                 if (isDemoMode) {
                     setInventory(JSON.parse(localStorage.getItem('mobistock_inv') || '[]'));
@@ -156,7 +161,7 @@
                     setInventory(items);
                     setIsLoading(false);
                 }, (error) => {
-                    console.error("Inventory sync error:", error);
+                    console.error("Inventory sync broken:", error);
                     setIsLoading(false);
                 });
 
@@ -167,7 +172,7 @@
                     txs.sort((a, b) => b.timestamp - a.timestamp); 
                     setTransactions(txs);
                 }, (error) => {
-                    console.error("Transactions sync error:", error);
+                    console.error("Transactions tracking broken:", error);
                 });
 
                 return () => {
@@ -176,9 +181,59 @@
                 };
             }, [user, db, fbLoaded]);
 
+            const handleAdminLogin = async (e) => {
+                e.preventDefault();
+                setLoginError('');
+                setIsLoggingIn(true);
+
+                const formData = new FormData(e.target);
+                const email = formData.get('email');
+                const password = formData.get('password');
+
+                if (isDemoMode) {
+                    if (email === 'admin@bhaktistock.com' && password === 'admin123') {
+                        setUser({ uid: 'demo-admin-uid', email: email, isAnonymous: false });
+                    } else {
+                        setLoginError('Invalid credentials! Hint: Use admin@bhaktistock.com and admin123');
+                    }
+                    setIsLoggingIn(false);
+                    return;
+                }
+
+                if (window.FB && auth) {
+                    try {
+                        await window.FB.signInWithEmailAndPassword(auth, email, password);
+                    } catch (err) {
+                        console.error("Authentication Error Details:", err);
+                        setLoginError('Access Denied. Check your admin credentials.');
+                    } finally {
+                        setIsLoggingIn(false);
+                    }
+                }
+            };
+
+            const handleAdminLogout = async () => {
+                setIsLoading(true);
+                if (isDemoMode) {
+                    setUser({ uid: 'local-demo-user', isAnonymous: true });
+                    setInventory([]);
+                    setTransactions([]);
+                    setIsLoading(false);
+                    return;
+                }
+                if (window.FB && auth) {
+                    try {
+                        await window.FB.signOut(auth);
+                    } catch (err) {
+                        console.error("Logout execution error:", err);
+                        setIsLoading(false);
+                    }
+                }
+            };
+
             const saveItem = async (e) => {
                 e.preventDefault();
-                if (!user) return;
+                if (!user || user.isAnonymous) return;
                 
                 const formData = new FormData(e.target);
                 const itemData = {
@@ -216,8 +271,8 @@
             };
 
             const deleteItem = async (id) => {
-                if (!user) return;
-                if (confirm("Are you sure you want to delete this item?")) {
+                if (!user || user.isAnonymous) return;
+                if (confirm("Permanently delete this item from the catalog?")) {
                     if (isDemoMode) {
                         const newInv = inventory.filter(i => i.id !== id);
                         setInventory(newInv);
@@ -226,24 +281,19 @@
                         try {
                             await window.FB.deleteDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', id));
                         } catch (err) {
-                            console.error("Delete error:", err);
+                            console.error("Delete execution error:", err);
                         }
                     }
                 }
             };
 
-            // Process Stock Inward / Outward (Sales)
             const handleStockMovement = async (e) => {
                 e.preventDefault();
-                if (!user || !movementItem) return;
+                if (!user || user.isAnonymous || !movementItem) return;
 
                 const currentQty = movementItem.quantity || 0;
                 const change = parseInt(movementQuantity) || 0;
-                
-                // Calculate new quantity contextually
-                const newQuantity = movementType === 'in' 
-                    ? currentQty + change 
-                    : Math.max(0, currentQty - change);
+                const newQuantity = movementType === 'in' ? currentQty + change : Math.max(0, currentQty - change);
 
                 const txData = {
                     itemId: movementItem.id,
@@ -266,12 +316,10 @@
                     localStorage.setItem('mobistock_tx', JSON.stringify(updatedTxs));
                 } else if (db) {
                     try {
-                        // Update stock level
                         await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', movementItem.id), { quantity: newQuantity });
-                        // Record transactional history log
                         await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'transactions', Date.now().toString()), txData);
                     } catch (err) {
-                        console.error("Stock movement error:", err);
+                        console.error("Transaction deployment execution error:", err);
                     }
                 }
 
@@ -280,104 +328,84 @@
                 setMovementQuantity(1);
             };
 
-            // Calculate metrics for Daily Reports
             const getDailyMetrics = () => {
                 const todayStart = new Date();
                 todayStart.setHours(0, 0, 0, 0);
                 const startTimestamp = todayStart.getTime();
 
                 const todayTx = transactions.filter(t => t.timestamp >= startTimestamp);
-                
-                let totalInward = 0;
-                let totalOutwardSales = 0;
-                let dailyRevenue = 0;
+                let totalInward = 0, totalOutwardSales = 0, dailyRevenue = 0;
 
                 todayTx.forEach(t => {
-                    if (t.type === 'in') {
-                        totalInward += t.quantity;
-                    } else if (t.type === 'out') {
+                    if (t.type === 'in') totalInward += t.quantity;
+                    else if (t.type === 'out') {
                         totalOutwardSales += t.quantity;
                         dailyRevenue += (t.totalValue || (t.quantity * t.price));
                     }
                 });
 
-                return {
-                    transactions: todayTx,
-                    totalInward,
-                    totalOutwardSales,
-                    dailyRevenue
-                };
+                return { transactions: todayTx, totalInward, totalOutwardSales, dailyRevenue };
             };
 
             const dailyReport = getDailyMetrics();
             const lowStockCount = inventory.filter(item => item.quantity <= 5).length;
 
-            return (
-                <div className="min-h-screen pb-safe flex flex-col">
-                    {/* Top Header navbar */}
-                    <header className="bg-white border-b border-gray-200 sticky top-0 z-40 px-6 py-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between shadow-sm">
-                        <div className="flex items-center justify-between">
-                            <h1 className="text-2xl font-black text-blue-600 tracking-tight flex items-center gap-2">
-                                <Icon name="Package" className="text-blue-600" /> BhaktiStock
-                            </h1>
-                        </div>
-                        
-                        {/* Tab Switch Control Elements */}
-                        <div className="flex bg-gray-100 p-1 rounded-xl self-center sm:self-auto">
-                            <button 
-                                onClick={() => setActiveTab('inventory')}
-                                className={`px-4 py-2 font-bold text-sm rounded-lg flex items-center gap-2 transition-all ${activeTab === 'inventory' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
-                            >
-                                <Icon name="Layers" size={16} /> Stock Board
-                            </button>
-                            <button 
-                                onClick={() => setActiveTab('report')}
-                                className={`px-4 py-2 font-bold text-sm rounded-lg flex items-center gap-2 transition-all relative ${activeTab === 'report' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
-                            >
-                                <Icon name="TrendingUp" size={16} /> Daily Sales Report
-                            </button>
-                        </div>
+            // Excel Downloader Engine Function
+            const exportToExcel = () => {
+                if (dailyReport.transactions.length === 0) {
+                    alert("No operation logs captured for today to map into an Excel document.");
+                    return;
+                }
 
-                        <button 
-                            onClick={() => { setCurrentItem(null); setIsItemModalOpen(true); }}
-                            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-xl flex items-center justify-center gap-2 transition-all shadow-md active:scale-95"
-                        >
-                            <Icon name="Plus" size={18} /> Add Product
-                        </button>
-                    </header>
+                // Map clean, row data array for Excel conversion
+                const excelRows = dailyReport.transactions.map((tx) => ({
+                    "Timestamp": new Date(tx.timestamp).toLocaleTimeString(),
+                    "Product Name": tx.itemName,
+                    "SKU Reference Code": tx.sku,
+                    "Action Type": tx.type === 'in' ? 'Inward Ingest' : 'Outward Sale',
+                    "Delta Quantity": tx.quantity,
+                    "Unit Cost ($)": tx.price,
+                    "Total Value Cross ($)": parseFloat((tx.totalValue || (tx.quantity * tx.price)).toFixed(2))
+                }));
 
-                    {/* Quick Metric Ribbon */}
-                    <section className="bg-amber-50 border-b border-amber-200 px-6 py-2 flex items-center justify-between">
-                        <div className="flex items-center gap-2 text-amber-800 text-sm font-medium">
-                            <Icon name="AlertTriangle" size={16} className="text-amber-600" />
-                            <span><strong>{lowStockCount} items</strong> are at or below low stock alert threshold (5 items left).</span>
-                        </div>
-                    </section>
+                // Append empty parsing spacing row followed by system metrics logs summary card metrics arrays
+                excelRows.push({}); 
+                excelRows.push({ "Timestamp": "SUMMARY DATA SPECIFICATION LEDGER" });
+                excelRows.push({ "Timestamp": "Total Combined Daily Revenue ($)", "Product Name": parseFloat(dailyReport.dailyRevenue.toFixed(2)) });
+                excelRows.push({ "Timestamp": "Total Volume Sold Outward (Units)", "Product Name": dailyReport.totalOutwardSales });
+                excelRows.push({ "Timestamp": "Total Volume Ingested Inward (Units)", "Product Name": dailyReport.totalInward });
 
-                    {/* Dynamic View rendering switch routing */}
-                    <main className="p-6 max-w-5xl mx-auto w-full flex-grow">
-                        {isLoading ? (
-                            <div className="flex flex-col items-center justify-center py-20">
-                                <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                                <p className="text-gray-500 font-medium mt-4">Syncing live cloud database...</p>
-                            </div>
-                        ) : activeTab === 'inventory' ? (
-                            /* INVENTORY LIST TAB VIEW MODULE */
-                            inventory.length === 0 ? (
-                                <div className="bg-white border border-dashed border-gray-300 rounded-2xl p-12 text-center">
-                                    <Icon name="Inbox" size={48} className="mx-auto text-gray-400 mb-3" />
-                                    <h3 className="text-lg font-bold text-gray-700">No stock found</h3>
-                                    <p className="text-gray-400 text-sm mb-4">Add your first product to distribute configuration to all devices.</p>
+                // Construct spreadsheet entity instances safely via SheetJS utils
+                const worksheet = XLSX.utils.json_to_sheet(excelRows);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, worksheet, "Daily Ledger Feed");
+
+                // Download execution pipeline trigger
+                const todayString = new Date().toISOString().split('T')[0];
+                XLSX.writeFile(workbook, `BhaktiStock_Daily_Report_${todayString}.xlsx`);
+            };
+
+            if (isLoading) {
+                return (
+                    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center">
+                        <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                        <p className="text-gray-500 font-bold mt-4 tracking-wide">Syncing Security Handshake Protocol...</p>
+                    </div>
+                );
+            }
+
+            if (!user || user.isAnonymous) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-blue-50 to-gray-100">
+                        <div className="w-full max-w-md bg-white rounded-3xl shadow-xl border border-gray-100 p-8 space-y-6 animate-fade-in">
+                            <div className="text-center space-y-2">
+                                <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center mx-auto shadow-sm">
+                                    <Icon name="Lock" size={32} />
                                 </div>
-                            ) : (
-                                <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
-                                    {inventory.map(item => {
-                                        const isLowStock = item.quantity <= 5;
-                                        return (
-                                            <div key={item.id} className={`bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between ${isLowStock ? 'border-amber-300 bg-amber-50/20' : 'border-gray-200'}`}>
-                                                <div>
-                                                    <div className="flex justify-between items-start mb-2">
-                                                        <span className="text-xs bg-blue-50 text-blue-600 font-bold px-2.5 py-1 rounded-lg uppercase tracking-wider">{item.category}</span>
-                                                        <div className="flex gap-1">
-                                                            <button onClick={() => { setCurrentItem(item); setIsItemModalOpen(true); }} className="p-1.5 text-gray-500 hover:text-blue-600 rounded-lg hover:bg-gray-100"><Icon name="Edit" size={16} /></button>
-                                                            <button onClick={() => deleteIt
+                                <h2 className="text-2xl font-black text-gray-900 tracking-tight">BhaktiStock Admin</h2>
+                                <p className="text-gray-400 text-sm">Please sign in below to open the real-time stock matrix dashboard.</p>
+                            </div>
+
+                            {loginError && (
+                                <div className="p-4 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl flex items-center gap-2">
+                                    <Icon name="AlertCircle" size={16} className="text-re
