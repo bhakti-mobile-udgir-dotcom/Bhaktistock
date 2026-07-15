@@ -33,7 +33,6 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Expose Firebase to the global scope for the React app to consume safely
         window.FB = {
             initializeApp, getApps, getApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
             getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot
@@ -48,33 +47,20 @@
             
             useEffect(() => {
                 if (!containerRef.current || !window.lucide) return;
-                
-                // Convert CamelCase to kebab-case (e.g. AlertTriangle -> alert-triangle)
                 let kebabName = name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
-                
-                // Clean up inconsistencies between lucide-react and vanilla lucide (e.g., CheckCircle2 -> check-circle)
                 if (kebabName.endsWith('-2')) {
                     kebabName = kebabName.replace('-2', '');
                 }
-
-                // Inject a fresh standard tag for Lucide to convert to SVG
                 containerRef.current.innerHTML = `<i data-lucide="${kebabName}"></i>`;
-                
-                // Let the official API safely render the SVG
                 window.lucide.createIcons({
                     root: containerRef.current,
-                    attrs: {
-                        width: size,
-                        height: size,
-                        class: className
-                    }
+                    attrs: { width: size, height: size, class: className }
                 });
             }, [name, size, className]);
             
             return <span ref={containerRef} className="contents" style={{ display: 'contents' }} />;
         };
 
-        // 🔥 FIREBASE CONFIGURATION 🔥
         const manualFirebaseConfig = {
             apiKey: "AIzaSyCkWXVNjDVfLk9xllTD3IsXMwnbyvQeNrE",
             authDomain: "bhakti-stock.firebaseapp.com",
@@ -96,74 +82,34 @@
             const [isLoading, setIsLoading] = useState(true);
             const [activeTab, setActiveTab] = useState('dashboard');
             
-            const [searchTerm, setSearchTerm] = useState('');
-            const [showFilters, setShowFilters] = useState(false);
-            const [filters, setFilters] = useState({ brand: '', status: 'all' });
-            
             const [isItemModalOpen, setIsItemModalOpen] = useState(false);
             const [currentItem, setCurrentItem] = useState(null);
-            const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
-            const [movementItem, setMovementItem] = useState(null);
-            const [movementType, setMovementType] = useState('in');
-            const [movementQuantity, setMovementQuantity] = useState(1);
             
-            const [activeMenuId, setActiveMenuId] = useState(null);
-            const [deferredPrompt, setDeferredPrompt] = useState(null);
-            const [showInstallBtn, setShowInstallBtn] = useState(false);
-            
-            // Firebase References
             const [fbLoaded, setFbLoaded] = useState(false);
             const [db, setDb] = useState(null);
             const [auth, setAuth] = useState(null);
 
-            // Wait for Firebase module to load globally & Initialize App SAFELY exactly once
             useEffect(() => {
                 const setupFirebase = () => {
                     if (!isDemoMode && window.FB) {
-                        let app;
-                        if (window.FB.getApps().length === 0) {
-                            app = window.FB.initializeApp(firebaseConfig);
-                        } else {
-                            app = window.FB.getApp();
-                        }
+                        let app = window.FB.getApps().length === 0 ? window.FB.initializeApp(firebaseConfig) : window.FB.getApp();
                         setAuth(window.FB.getAuth(app));
                         setDb(window.FB.getFirestore(app));
                     }
                     setFbLoaded(true);
                 };
-
-                if (window.FB) {
-                    setupFirebase();
-                } else {
+                if (window.FB) setupFirebase();
+                else {
                     const timer = setInterval(() => {
-                        if (window.FB) {
-                            setupFirebase();
-                            clearInterval(timer);
-                        }
+                        if (window.FB) { setupFirebase(); clearInterval(timer); }
                     }, 50);
                     return () => clearInterval(timer);
                 }
             }, []);
 
-            // Handle Authentication and App events separately
             useEffect(() => {
                 if (!fbLoaded) return;
-
-                window.addEventListener('beforeinstallprompt', (e) => {
-                    e.preventDefault();
-                    setDeferredPrompt(e);
-                    setShowInstallBtn(true);
-                });
-
-                window.addEventListener('appinstalled', () => {
-                    setDeferredPrompt(null);
-                    setShowInstallBtn(false);
-                });
-
-                if (isDemoMode) {
-                    setUser({ uid: 'local-demo-user' });
-                    return;
-                }
+                if (isDemoMode) { setUser({ uid: 'local-demo-user' }); return; }
 
                 if (window.FB && auth) {
                     const initAuth = async () => {
@@ -178,47 +124,46 @@
                             setUser({ uid: 'local-fallback-user' }); 
                         }
                     };
-
                     initAuth();
                     const unsubscribe = window.FB.onAuthStateChanged(auth, setUser);
                     return () => unsubscribe();
                 }
             }, [fbLoaded, auth]);
 
-            // Database syncing
+            // Real-Time Database Syncing (Fixed Shared Paths)
             useEffect(() => {
                 if (!user || (!isDemoMode && !fbLoaded)) return;
                 
                 if (isDemoMode) {
-                    const localInv = JSON.parse(localStorage.getItem('mobistock_inv') || '[]');
-                    const localTx = JSON.parse(localStorage.getItem('mobistock_tx') || '[]');
-                    setInventory(localInv);
-                    setTransactions(localTx);
+                    setInventory(JSON.parse(localStorage.getItem('mobistock_inv') || '[]'));
+                    setTransactions(JSON.parse(localStorage.getItem('mobistock_tx') || '[]'));
                     setIsLoading(false);
                     return;
                 }
 
                 if (!db) return;
 
-                const inventoryRef = window.FB.collection(db, 'artifacts', appId, 'users', user.uid, 'inventory');
+                // FIXED: Removed 'users' and 'user.uid' to allow multi-device sharing
+                const inventoryRef = window.FB.collection(db, 'artifacts', appId, 'inventory');
                 const unsubscribeInv = window.FB.onSnapshot(inventoryRef, (snapshot) => {
                     const items = [];
                     snapshot.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
                     setInventory(items);
-                    setIsLoading(false); // Stop loading on success
+                    setIsLoading(false);
                 }, (error) => {
-                    console.error("Inventory error (Check Firestore Rules!):", error);
-                    setIsLoading(false); // Stop loading even if it fails!
+                    console.error("Inventory sync error:", error);
+                    setIsLoading(false);
                 });
 
-                const txRef = window.FB.collection(db, 'artifacts', appId, 'users', user.uid, 'transactions');
+                // FIXED: Removed 'users' and 'user.uid' to allow multi-device sharing
+                const txRef = window.FB.collection(db, 'artifacts', appId, 'transactions');
                 const unsubscribeTx = window.FB.onSnapshot(txRef, (snapshot) => {
                     const txs = [];
                     snapshot.forEach(doc => txs.push({ id: doc.id, ...doc.data() }));
                     txs.sort((a, b) => b.timestamp - a.timestamp); 
                     setTransactions(txs);
                 }, (error) => {
-                    console.error("Transactions error:", error);
+                    console.error("Transactions sync error:", error);
                 });
 
                 return () => {
@@ -226,45 +171,6 @@
                     unsubscribeTx && unsubscribeTx();
                 };
             }, [user, db, fbLoaded]);
-
-            const handleInstallClick = async () => {
-                if (deferredPrompt) {
-                    deferredPrompt.prompt();
-                    await deferredPrompt.userChoice;
-                    setDeferredPrompt(null);
-                    setShowInstallBtn(false);
-                }
-            };
-
-            const loadSampleData = async () => {
-                if (!user) return;
-                setIsLoading(true);
-                const samples = [
-                    { id: '1', name: 'iPhone 15 Pro', brand: 'Apple', sku: 'IP15P-128', category: 'Smartphones', price: 999, quantity: 15 },
-                    { id: '2', name: 'Galaxy S24 Ultra', brand: 'Samsung', sku: 'SAM-S24U', category: 'Smartphones', price: 1199, quantity: 8 },
-                    { id: '3', name: 'AirPods Pro 2', brand: 'Apple', sku: 'APP2', category: 'Audio', price: 249, quantity: 30 },
-                    { id: '4', name: '20W USB-C Adapter', brand: 'Anker', sku: 'ANK-20W', category: 'Chargers & Cables', price: 19, quantity: 45 },
-                ];
-
-                if (isDemoMode) {
-                    setInventory(samples);
-                    localStorage.setItem('mobistock_inv', JSON.stringify(samples));
-                    setIsLoading(false);
-                    return;
-                }
-
-                if (db) {
-                    try {
-                        for (const item of samples) {
-                            await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', item.id), item);
-                        }
-                    } catch (err) {
-                        console.error("Could not save sample data. Please check your Firestore Security rules.");
-                        alert("Database save failed. Ensure Firestore rules allow read/write!");
-                    }
-                }
-                setIsLoading(false);
-            };
 
             const saveItem = async (e) => {
                 e.preventDefault();
@@ -276,8 +182,8 @@
                     brand: formData.get('brand'),
                     sku: formData.get('sku'),
                     category: formData.get('category'),
-                    price: parseFloat(formData.get('price')),
-                    quantity: parseInt(formData.get('quantity')),
+                    price: parseFloat(formData.get('price')) || 0,
+                    quantity: parseInt(formData.get('quantity')) || 0,
                 };
 
                 if (isDemoMode) {
@@ -292,10 +198,12 @@
                 } else if (db) {
                     try {
                         if (currentItem) {
-                            await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', currentItem.id), itemData);
+                            // FIXED PATH
+                            await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', currentItem.id), itemData);
                         } else {
                             const newId = Date.now().toString();
-                            await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', newId), { id: newId, ...itemData });
+                            // FIXED PATH
+                            await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', newId), { id: newId, ...itemData });
                         }
                     } catch (err) {
                         console.error("Save error:", err);
@@ -313,419 +221,113 @@
                     localStorage.setItem('mobistock_inv', JSON.stringify(newInv));
                 } else if (db) {
                     try {
-                        await window.FB.deleteDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', id));
+                        // FIXED PATH
+                        await window.FB.deleteDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', id));
                     } catch (err) {
                         console.error("Delete error:", err);
                     }
                 }
-                setActiveMenuId(null);
-            };
-
-            const handleStockMovement = async () => {
-                if (!user || !movementItem) return;
-                const item = inventory.find(i => i.id === movementItem.id);
-                if (!item) return;
-
-                const newQuantity = movementType === 'in' 
-                ? item.quantity + movementQuantity 
-                : Math.max(0, item.quantity - movementQuantity);
-                
-                if (isDemoMode) {
-                    const newInv = inventory.map(i => i.id === item.id ? { ...i, quantity: newQuantity } : i);
-                    setInventory(newInv);
-                    localStorage.setItem('mobistock_inv', JSON.stringify(newInv));
-                    
-                    const newTx = {
-                        id: Date.now().toString(), itemId: item.id, itemName: item.name, sku: item.sku,
-                        type: movementType, quantity: movementQuantity, price: item.price || 0, timestamp: Date.now()
-                    };
-                    const updatedTxs = [newTx, ...transactions].sort((a, b) => b.timestamp - a.timestamp);
-                    setTransactions(updatedTxs);
-                    localStorage.setItem('mobistock_tx', JSON.stringify(updatedTxs));
-                } else if (db) {
-                    try {
-                        await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', item.id), { quantity: newQuantity });
-                        await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'transactions', Date.now().toString()), {
-                            itemId: item.id, itemName: item.name, sku: item.sku,
-                            type: movementType, quantity: movementQuantity, price: item.price || 0, timestamp: Date.now()
-                        });
-                    } catch (err) {
-                        console.error("Movement error:", err);
-                    }
-                }
-
-                setIsMovementModalOpen(false); 
-                setMovementItem(null); 
-                setMovementQuantity(1);
-                setActiveMenuId(null);
-            };
-
-            const ItemModal = () => {
-                const allCategories = [...new Set(['Smartphones', 'Accessories', 'Audio', 'Chargers', ...inventory.map(i => i.category)])];
-
-                return (
-                <div className={`fixed inset-0 z-50 flex items-end md:items-center justify-center transition-all duration-300 ${isItemModalOpen ? 'opacity-100 visible' : 'opacity-0 invisible'}`}>
-                    <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setIsItemModalOpen(false)} />
-                    <div className={`relative w-full md:w-full md:max-w-md bg-white rounded-t-3xl md:rounded-2xl shadow-2xl transition-transform duration-300 transform ${isItemModalOpen ? 'translate-y-0' : 'translate-y-full md:scale-95'}`}>
-                    <div className="w-12 h-1.5 bg-gray-300 rounded-full mx-auto mt-3 mb-2 md:hidden" />
-                    <div className="px-6 py-4 flex justify-between items-center border-b border-gray-100">
-                        <h3 className="text-xl font-bold text-gray-900">{currentItem ? 'Edit Item' : 'New Item'}</h3>
-                        <button type="button" onClick={() => setIsItemModalOpen(false)} className="p-2 text-gray-400 hover:text-gray-700 bg-gray-100 rounded-full"><Icon name="X" size={20} /></button>
-                    </div>
-                    <form onSubmit={saveItem} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto hide-scrollbar">
-                        <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Item Name</label>
-                        <input name="name" defaultValue={currentItem?.name} required className="w-full px-4 py-3 bg-gray-50 border-0 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none transition-all" />
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Brand</label>
-                            <input name="brand" defaultValue={currentItem?.brand} className="w-full px-4 py-3 bg-gray-50 border-0 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none transition-all" />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">SKU</label>
-                            <input name="sku" defaultValue={currentItem?.sku} required className="w-full px-4 py-3 bg-gray-50 border-0 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none transition-all" />
-                        </div>
-                        </div>
-                        <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Category</label>
-                        <input 
-                            name="category" 
-                            list="category-options" 
-                            defaultValue={currentItem?.category || 'Smartphones'} 
-                            placeholder="Type or select a category"
-                            required
-                            className="w-full px-4 py-3 bg-gray-50 border-0 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none transition-all" 
-                        />
-                        <datalist id="category-options">
-                            {allCategories.filter(Boolean).map(cat => <option key={cat} value={cat} />)}
-                        </datalist>
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Price ($)</label>
-                            <input name="price" type="number" step="0.01" defaultValue={currentItem?.price} required className="w-full px-4 py-3 bg-gray-50 border-0 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none transition-all" />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Initial Qty</label>
-                            <input name="quantity" type="number" defaultValue={currentItem?.quantity ?? 0} required className="w-full px-4 py-3 bg-gray-50 border-0 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none transition-all" />
-                        </div>
-                        </div>
-                        <div className="pt-4 pb-4 md:pb-0">
-                        <button type="submit" className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold shadow-lg shadow-blue-200 active:scale-[0.98] transition-transform">Save Item</button>
-                        </div>
-                    </form>
-                    </div>
-                </div>
-                );
-            };
-
-            const MovementModal = () => {
-                return (
-                <div className={`fixed inset-0 z-50 flex items-end md:items-center justify-center transition-all duration-300 ${isMovementModalOpen ? 'opacity-100 visible' : 'opacity-0 invisible'}`}>
-                    <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setIsMovementModalOpen(false)} />
-                    <div className={`relative w-full md:w-full md:max-w-sm bg-white rounded-t-3xl md:rounded-2xl shadow-2xl transition-transform duration-300 transform ${isMovementModalOpen ? 'translate-y-0' : 'translate-y-full md:scale-95'}`}>
-                    <div className={`px-6 py-5 rounded-t-3xl md:rounded-t-2xl flex justify-between items-center ${movementType === 'in' ? 'bg-emerald-600' : 'bg-amber-600'}`}>
-                        <h3 className="text-lg font-bold text-white flex items-center space-x-2">
-                        {movementType === 'in' ? <Icon name="Download" size={20} /> : <Icon name="Upload" size={20} />}
-                        <span>{movementType === 'in' ? 'Receive Stock' : 'Dispatch Stock'}</span>
-                        </h3>
-                        <button type="button" onClick={() => setIsMovementModalOpen(false)} className="text-white/80 hover:bg-white/20 p-2 rounded-full"><Icon name="X" size={20} /></button>
-                    </div>
-                    <div className="p-6 space-y-6 pb-10 md:pb-6">
-                        <div className="text-center">
-                        <p className="text-sm text-gray-500 mb-1">{movementItem?.sku}</p>
-                        <h4 className="text-xl font-black text-gray-900">{movementItem?.name}</h4>
-                        <p className="text-sm font-bold mt-2 text-gray-600">Current Stock: <span className="text-gray-900">{movementItem?.quantity}</span></p>
-                        </div>
-                        <div>
-                        <label className="block text-xs font-bold text-center text-gray-400 uppercase tracking-wider mb-2">Amount to {movementType === 'in' ? 'Add' : 'Remove'}</label>
-                        <div className="flex items-center justify-center space-x-4">
-                            <button onClick={() => setMovementQuantity(Math.max(1, movementQuantity - 1))} className="w-12 h-12 rounded-full bg-gray-100 text-gray-600 font-black text-xl flex items-center justify-center active:bg-gray-200">-</button>
-                            <input type="number" min="1" value={movementQuantity} onChange={(e) => setMovementQuantity(parseInt(e.target.value) || 1)} className="w-24 px-2 py-3 text-3xl font-black bg-transparent border-b-2 border-gray-300 focus:border-blue-600 outline-none text-center" />
-                            <button onClick={() => setMovementQuantity(movementQuantity + 1)} className="w-12 h-12 rounded-full bg-gray-100 text-gray-600 font-black text-xl flex items-center justify-center active:bg-gray-200">+</button>
-                        </div>
-                        </div>
-                        <button type="button" onClick={handleStockMovement} className={`w-full py-4 text-white rounded-xl font-bold shadow-lg active:scale-[0.98] transition-transform ${movementType === 'in' ? 'bg-emerald-600 shadow-emerald-200' : 'bg-amber-600 shadow-amber-200'}`}>Confirm Transaction</button>
-                    </div>
-                    </div>
-                </div>
-                );
-            };
-
-            const renderDashboard = () => {
-                const totalValue = inventory.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-                const lowStockItems = inventory.filter(item => item.quantity <= 5 && item.quantity > 0);
-                const outOfStockItems = inventory.filter(item => item.quantity === 0);
-
-                return (
-                <div className="space-y-4 pb-20 md:pb-6 animate-fade-in">
-                    {inventory.length === 0 && !isLoading && (
-                    <div className="bg-blue-50 rounded-2xl p-6 text-center shadow-sm mx-4 mt-4">
-                        <Icon name="PackageOpen" size={48} className="mx-auto text-blue-500 mb-3" />
-                        <h3 className="text-blue-900 font-bold text-lg mb-2">Welcome to BhaktiStock!</h3>
-                        <p className="text-blue-700 text-sm mb-4">Your database is empty. Load samples to see how it works.</p>
-                        <button onClick={loadSampleData} className="px-6 py-2.5 bg-blue-600 text-white rounded-full font-bold shadow-md">Load Sample Data</button>
-                    </div>
-                    )}
-                    
-                    <div className="grid grid-cols-2 gap-4 px-4 mt-4">
-                    <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 flex flex-col justify-between h-28">
-                        <Icon name="Package" size={24} className="text-blue-500" />
-                        <div>
-                        <h3 className="text-2xl font-black text-gray-900 leading-none">{inventory.length}</h3>
-                        <p className="text-xs font-bold text-gray-400 mt-1 uppercase">Total Items</p>
-                        </div>
-                    </div>
-                    <div className="bg-blue-600 rounded-2xl p-4 shadow-md text-white flex flex-col justify-between h-28 relative overflow-hidden">
-                        <Icon name="DollarSign" size={80} className="absolute -right-4 -top-4 opacity-20" />
-                        <Icon name="DollarSign" size={24} className="text-blue-200" />
-                        <div className="relative z-10">
-                        <h3 className="text-2xl font-black leading-none">${(totalValue/1000).toFixed(1)}k</h3>
-                        <p className="text-xs font-bold text-blue-200 mt-1 uppercase">Value</p>
-                        </div>
-                    </div>
-                    </div>
-
-                    <div className="px-4">
-                    <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 mt-2">
-                        <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-base font-bold text-gray-900 flex items-center"><Icon name="AlertTriangle" size={18} className="text-amber-500 mr-2"/> Action Needed</h3>
-                        </div>
-                        
-                        {lowStockItems.length === 0 && outOfStockItems.length === 0 ? (
-                            <div className="text-center py-6 text-gray-400">
-                            <Icon name="CheckCircle2" size={32} className="mx-auto text-emerald-400 mb-2" />
-                            <p className="text-sm font-bold">All stock levels healthy!</p>
-                            </div>
-                        ) : (
-                            <div className="space-y-3">
-                            {[...outOfStockItems, ...lowStockItems].slice(0, 4).map(item => (
-                                <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                                <div className="flex-1 overflow-hidden pr-2">
-                                    <h4 className="font-bold text-gray-900 text-sm truncate">{item.name}</h4>
-                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full mt-1 inline-block ${item.quantity === 0 ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
-                                    {item.quantity} left
-                                    </span>
-                                </div>
-                                <button onClick={() => { setMovementItem(item); setMovementType('in'); setIsMovementModalOpen(true); }} className="w-10 h-10 bg-white border border-gray-200 rounded-full flex items-center justify-center text-blue-600 shadow-sm">
-                                    <Icon name="Download" size={18} />
-                                </button>
-                                </div>
-                            ))}
-                            </div>
-                        )}
-                    </div>
-                    </div>
-                </div>
-                );
-            };
-
-            const renderInventory = () => {
-                const uniqueBrands = [...new Set(inventory.map(i => i.brand).filter(Boolean))];
-                const filteredInventory = inventory.filter(item => {
-                const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) || item.sku.toLowerCase().includes(searchTerm.toLowerCase());
-                const matchesBrand = filters.brand === '' || item.brand === filters.brand;
-                let matchesStatus = true;
-                if (filters.status === 'in_stock') matchesStatus = item.quantity > 5;
-                if (filters.status === 'low_stock') matchesStatus = item.quantity > 0 && item.quantity <= 5;
-                if (filters.status === 'out_of_stock') matchesStatus = item.quantity === 0;
-                return matchesSearch && matchesBrand && matchesStatus;
-                });
-
-                return (
-                <div className="flex flex-col h-full animate-fade-in">
-                    <div className="px-4 pt-4 pb-2 sticky top-0 bg-gray-100 z-10">
-                    <div className="flex gap-2">
-                        <div className="relative flex-1">
-                        <Icon name="Search" className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                        <input 
-                            type="text" placeholder="Search SKU or name..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full pl-10 pr-4 py-3 bg-white border-0 shadow-sm rounded-xl outline-none text-sm font-medium"
-                        />
-                        </div>
-                        <button onClick={() => setShowFilters(!showFilters)} className={`p-3 rounded-xl shadow-sm flex items-center justify-center w-12 ${showFilters ? 'bg-blue-100 text-blue-700' : 'bg-white text-gray-600'}`}>
-                        <Icon name="Filter" size={18} />
-                        </button>
-                    </div>
-                    
-                    {showFilters && (
-                        <div className="flex gap-2 mt-2 overflow-x-auto pb-1 hide-scrollbar">
-                        <select value={filters.status} onChange={e => setFilters({...filters, status: e.target.value})} className="px-3 py-1.5 bg-white rounded-lg text-xs font-bold border border-gray-200 outline-none flex-shrink-0">
-                            <option value="all">All Status</option><option value="in_stock">In Stock</option><option value="low_stock">Low Stock</option><option value="out_of_stock">Empty</option>
-                        </select>
-                        <select value={filters.brand} onChange={e => setFilters({...filters, brand: e.target.value})} className="px-3 py-1.5 bg-white rounded-lg text-xs font-bold border border-gray-200 outline-none flex-shrink-0">
-                            <option value="">All Brands</option>
-                            {uniqueBrands.map(b => <option key={b} value={b}>{b}</option>)}
-                        </select>
-                        </div>
-                    )}
-                    </div>
-
-                    <div className="px-4 pb-24 space-y-3">
-                    {filteredInventory.map(item => (
-                        <div key={item.id} className="bg-white rounded-2xl p-4 shadow-sm relative">
-                        <div className="flex justify-between items-start pr-8">
-                            <div className="overflow-hidden">
-                            <h4 className="font-bold text-gray-900 text-base truncate">{item.name}</h4>
-                            <p className="text-xs font-semibold text-gray-500 mt-0.5">{item.sku} • {item.brand}</p>
-                            </div>
-                        </div>
-                        <div className="mt-4 flex items-end justify-between">
-                            <div className="flex items-center space-x-2">
-                            <span className={`w-2.5 h-2.5 rounded-full ${item.quantity > 5 ? 'bg-emerald-500' : item.quantity > 0 ? 'bg-amber-500' : 'bg-rose-500'}`}></span>
-                            <span className="font-black text-gray-900 text-lg">{item.quantity}</span>
-                            <span className="text-xs text-gray-500 font-bold">in stock</span>
-                            </div>
-                            <div className="font-black text-blue-600">${item.price}</div>
-                        </div>
-
-                        <div className="absolute top-3 right-2">
-                            <button onClick={() => setActiveMenuId(activeMenuId === item.id ? null : item.id)} className="p-2 text-gray-400 hover:bg-gray-50 rounded-full">
-                                <Icon name="MoreVertical" size={20} />
-                            </button>
-                            {activeMenuId === item.id && (
-                                <div className="absolute right-0 top-10 w-40 bg-white rounded-xl shadow-xl border border-gray-100 z-20 py-2 animate-fade-in">
-                                <button onClick={() => { setMovementItem(item); setMovementType('in'); setIsMovementModalOpen(true); setActiveMenuId(null); }} className="w-full text-left px-4 py-2.5 text-sm font-bold text-gray-700 hover:bg-gray-50 flex items-center space-x-2"><Icon name="Download" size={16} className="text-emerald-500"/><span>Receive</span></button>
-                                <button onClick={() => { setMovementItem(item); setMovementType('out'); setIsMovementModalOpen(true); setActiveMenuId(null); }} className="w-full text-left px-4 py-2.5 text-sm font-bold text-gray-700 hover:bg-gray-50 flex items-center space-x-2"><Icon name="Upload" size={16} className="text-amber-500"/><span>Dispatch</span></button>
-                                <div className="h-px bg-gray-100 my-1"></div>
-                                <button onClick={() => { setCurrentItem(item); setIsItemModalOpen(true); setActiveMenuId(null); }} className="w-full text-left px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-50 flex items-center space-x-2"><Icon name="Edit2" size={16} className="text-blue-500"/><span>Edit</span></button>
-                                <button onClick={() => deleteItem(item.id)} className="w-full text-left px-4 py-2 text-sm font-bold text-rose-600 hover:bg-rose-50 flex items-center space-x-2"><Icon name="Trash2" size={16}/><span>Delete</span></button>
-                                </div>
-                            )}
-                        </div>
-                        </div>
-                    ))}
-                    {filteredInventory.length === 0 && (
-                        <div className="text-center py-10 text-gray-400">
-                        <Icon name="Search" className="mx-auto text-gray-300 mb-3" size={40} />
-                        <p className="font-bold">No items found.</p>
-                        </div>
-                    )}
-                    </div>
-
-                    <button onClick={() => { setCurrentItem(null); setIsItemModalOpen(true); }} className="fixed bottom-24 right-5 w-14 h-14 bg-blue-600 text-white rounded-2xl flex items-center justify-center shadow-[0_4px_20px_rgba(37,99,235,0.4)] hover:bg-blue-700 active:scale-95 transition-all z-30 md:hidden">
-                    <Icon name="Plus" size={28} />
-                    </button>
-                </div>
-                );
-            };
-
-            const renderReports = () => {
-                const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-                const todayTxs = transactions.filter(tx => tx.timestamp >= todayStart.getTime());
-                const salesVal = todayTxs.filter(tx => tx.type === 'out').reduce((acc, tx) => acc + (tx.quantity * (tx.price || 0)), 0);
-
-                return (
-                <div className="px-4 pt-4 pb-24 space-y-4 animate-fade-in">
-                    <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-2xl p-5 shadow-md text-white">
-                    <p className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-1">Today's Sales</p>
-                    <h2 className="text-3xl font-black">${salesVal.toFixed(2)}</h2>
-                    <div className="mt-4 flex space-x-6">
-                        <div>
-                        <p className="text-gray-400 text-[10px] uppercase font-bold">Items Sold</p>
-                        <p className="text-xl font-bold">{todayTxs.filter(tx => tx.type === 'out').reduce((acc, tx) => acc + tx.quantity, 0)}</p>
-                        </div>
-                        <div>
-                        <p className="text-gray-400 text-[10px] uppercase font-bold">Received</p>
-                        <p className="text-xl font-bold">{todayTxs.filter(tx => tx.type === 'in').reduce((acc, tx) => acc + tx.quantity, 0)}</p>
-                        </div>
-                    </div>
-                    </div>
-
-                    <div>
-                    <h3 className="font-bold text-gray-800 mb-3 ml-1">Transaction Log</h3>
-                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden divide-y divide-gray-50">
-                        {todayTxs.length > 0 ? todayTxs.map(tx => (
-                        <div key={tx.id} className="p-4 flex items-center justify-between">
-                            <div className="flex items-center space-x-3 overflow-hidden">
-                            <div className={`p-2.5 rounded-full shrink-0 ${tx.type === 'in' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
-                                {tx.type === 'in' ? <Icon name="ArrowDownRight" size={18}/> : <Icon name="ArrowUpRight" size={18}/>}
-                            </div>
-                            <div className="overflow-hidden pr-2">
-                                <p className="font-bold text-gray-900 text-sm truncate">{tx.itemName}</p>
-                                <p className="text-[10px] font-bold text-gray-400 mt-0.5">{new Date(tx.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-                            </div>
-                            </div>
-                            <div className="text-right shrink-0">
-                                <p className={`font-black text-base ${tx.type === 'in' ? 'text-emerald-500' : 'text-gray-900'}`}>
-                                {tx.type === 'in' ? '+' : '-'}{tx.quantity}
-                                </p>
-                            </div>
-                        </div>
-                        )) : (
-                        <div className="p-8 text-center text-gray-400 text-sm font-bold">No transactions today.</div>
-                        )}
-                    </div>
-                    </div>
-                </div>
-                );
             };
 
             return (
-                <div className="min-h-screen bg-gray-100 font-sans text-gray-900 selection:bg-blue-200 flex flex-col md:flex-row relative">
-                
-                <header className="bg-blue-600 text-white px-4 py-3 shadow-md flex items-center justify-between sticky top-0 z-40 md:hidden">
-                    <div className="flex items-center space-x-2">
-                    <Icon name="Smartphone" size={24} className="opacity-90" />
-                    <h1 className="text-xl font-black tracking-tight">BhaktiStock</h1>
-                    </div>
-                    <div className="flex items-center">
-                    {showInstallBtn && (
-                        <button onClick={handleInstallClick} className="bg-white/20 px-3 py-1.5 rounded-full text-xs font-bold mr-2">Install App</button>
-                    )}
-                    {isDemoMode ? (
-                        <span className="bg-amber-500 text-white text-[10px] font-black px-2 py-1 rounded">DEMO</span>
-                    ) : (
-                        <Icon name="Database" size={16} className="text-emerald-300" />
-                    )}
-                    </div>
-                </header>
+                <div className="min-h-screen pb-safe">
+                    {/* Header */}
+                    <header className="bg-white border-b border-gray-200 sticky top-0 z-40 px-6 py-4 flex justify-between items-center">
+                        <h1 className="text-2xl font-black text-blue-600 tracking-tight flex items-center gap-2">
+                            <Icon name="Package" className="text-blue-600" /> BhaktiStock
+                        </h1>
+                        <button 
+                            onClick={() => { setCurrentItem(null); setIsItemModalOpen(true); }}
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-xl flex items-center gap-2 transition-all shadow-md active:scale-95"
+                        >
+                            <Icon name="Plus" size={18} /> Add Item
+                        </button>
+                    </header>
 
-                <main className="flex-1 w-full max-w-[600px] mx-auto md:max-w-full overflow-y-auto pb-safe relative" onClick={() => activeMenuId && setActiveMenuId(null)}>
-                    {isLoading && (
-                        <div className="absolute inset-0 z-50 bg-gray-100/80 backdrop-blur-sm flex items-center justify-center">
-                        <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+                    {/* Main Content Area */}
+                    <main className="p-6 max-w-5xl mx-auto">
+                        {isLoading ? (
+                            <div className="flex flex-col items-center justify-center py-20">
+                                <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                                <p className="text-gray-500 font-medium mt-4">Syncing live database...</p>
+                            </div>
+                        ) : inventory.length === 0 ? (
+                            <div className="bg-white border border-dashed border-gray-300 rounded-2xl p-12 text-center">
+                                <Icon name="Inbox" size={48} className="mx-auto text-gray-400 mb-3" />
+                                <h3 className="text-lg font-bold text-gray-700">No stock found</h3>
+                                <p className="text-gray-400 text-sm mb-4">Add your first product to distribute to all devices.</p>
+                            </div>
+                        ) : (
+                            <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
+                                {inventory.map(item => (
+                                    <div key={item.id} className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between">
+                                        <div>
+                                            <div className="flex justify-between items-start mb-2">
+                                                <span className="text-xs bg-blue-50 text-blue-600 font-bold px-2.5 py-1 rounded-lg uppercase tracking-wider">{item.category}</span>
+                                                <div className="flex gap-1">
+                                                    <button onClick={() => { setCurrentItem(item); setIsItemModalOpen(true); }} className="p-1.5 text-gray-500 hover:text-blue-600 rounded-lg hover:bg-gray-100"><Icon name="Edit" size={16} /></button>
+                                                    <button onClick={() => deleteItem(item.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50"><Icon name="Trash2" size={16} /></button>
+                                                </div>
+                                            </div>
+                                            <h3 className="font-bold text-lg text-gray-900 leading-tight">{item.name}</h3>
+                                            <p className="text-xs text-gray-400 font-mono mt-1">SKU: {item.sku} | {item.brand}</p>
+                                        </div>
+                                        <div className="flex justify-between items-baseline mt-6 pt-3 border-t border-gray-100">
+                                            <span className="text-xl font-black text-gray-900">${item.price}</span>
+                                            <span className={`text-sm font-bold ${item.quantity > 5 ? 'text-emerald-600' : 'text-amber-600'}`}>{item.quantity} in stock</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Add/Edit Modal */}
+                    {isItemModalOpen && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
+                            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setIsItemModalOpen(false)} />
+                            <form onSubmit={saveItem} className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden animate-slide-up">
+                                <div className="px-6 py-4 flex justify-between items-center border-b border-gray-100">
+                                    <h3 className="text-lg font-bold text-gray-900">{currentItem ? 'Edit Product' : 'Add Product'}</h3>
+                                    <button type="button" onClick={() => setIsItemModalOpen(false)} className="p-2 text-gray-400 hover:text-gray-700 bg-gray-100 rounded-full"><Icon name="X" size={18} /></button>
+                                </div>
+                                <div className="p-6 space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Item Name</label>
+                                        <input name="name" defaultValue={currentItem?.name} required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Brand</label>
+                                            <input name="brand" defaultValue={currentItem?.brand} className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">SKU</label>
+                                            <input name="sku" defaultValue={currentItem?.sku} required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Category</label>
+                                        <input name="category" defaultValue={currentItem?.category} placeholder="e.g., Smartphones" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Price ($)</label>
+                                            <input type="number" step="0.01" name="price" defaultValue={currentItem?.price} required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Quantity</label>
+                                            <input type="number" name="quantity" defaultValue={currentItem?.quantity} required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="px-6 py-4 bg-gray-50 flex justify-end gap-3 border-t border-gray-100">
+                                    <button type="button" onClick={() => setIsItemModalOpen(false)} className="px-4 py-2 text-gray-600 font-semibold hover:bg-gray-200 rounded-xl transition-all">Cancel</button>
+                                    <button type="submit" className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-all shadow-md">Save Product</button>
+                                </div>
+                            </form>
                         </div>
                     )}
-                    {activeTab === 'dashboard' ? renderDashboard() : activeTab === 'inventory' ? renderInventory() : renderReports()}
-                </main>
-
-                <nav className="fixed bottom-0 w-full bg-white border-t border-gray-200 flex justify-around items-center pb-[env(safe-area-inset-bottom)] z-40 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] md:hidden">
-                    <button onClick={() => setActiveTab('dashboard')} className={`flex flex-col items-center justify-center w-full py-3 space-y-1 transition-colors ${activeTab === 'dashboard' ? 'text-blue-600' : 'text-gray-400'}`}>
-                    <Icon name="LayoutDashboard" size={22} className={activeTab === 'dashboard' ? 'fill-blue-100' : ''} />
-                    <span className="text-[10px] font-bold">Home</span>
-                    </button>
-                    <button onClick={() => setActiveTab('inventory')} className={`flex flex-col items-center justify-center w-full py-3 space-y-1 transition-colors ${activeTab === 'inventory' ? 'text-blue-600' : 'text-gray-400'}`}>
-                    <Icon name="Package" size={22} className={activeTab === 'inventory' ? 'fill-blue-100' : ''} />
-                    <span className="text-[10px] font-bold">Items</span>
-                    </button>
-                    <button onClick={() => setActiveTab('reports')} className={`flex flex-col items-center justify-center w-full py-3 space-y-1 transition-colors ${activeTab === 'reports' ? 'text-blue-600' : 'text-gray-400'}`}>
-                    <Icon name="FileText" size={22} className={activeTab === 'reports' ? 'fill-blue-100' : ''} />
-                    <span className="text-[10px] font-bold">Reports</span>
-                    </button>
-                </nav>
-
-                <aside className="hidden md:flex flex-col w-64 bg-white border-r border-gray-200 p-6 h-screen sticky top-0">
-                    <h1 className="text-2xl font-black text-blue-600 mb-8 flex items-center"><Icon name="Smartphone" className="mr-2"/> BhaktiStock</h1>
-                    <nav className="space-y-2 flex-1">
-                    {['dashboard', 'inventory', 'reports'].map(tab => (
-                        <button key={tab} onClick={() => setActiveTab(tab)} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-bold capitalize ${activeTab === tab ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:bg-gray-50'}`}>
-                        {tab === 'dashboard' ? <Icon name="LayoutDashboard" size={20}/> : tab === 'inventory' ? <Icon name="Package" size={20}/> : <Icon name="FileText" size={20}/>}
-                        <span>{tab}</span>
-                        </button>
-                    ))}
-                    </nav>
-                </aside>
-
-                <ItemModal />
-                <MovementModal />
                 </div>
             );
-        }
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
+        
