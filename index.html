@@ -80,10 +80,16 @@
             const [transactions, setTransactions] = useState([]);
             const [user, setUser] = useState(null);
             const [isLoading, setIsLoading] = useState(true);
-            const [activeTab, setActiveTab] = useState('dashboard');
+            const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' or 'report'
             
             const [isItemModalOpen, setIsItemModalOpen] = useState(false);
             const [currentItem, setCurrentItem] = useState(null);
+
+            // Stock Movement States
+            const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
+            const [movementItem, setMovementItem] = useState(null);
+            const [movementType, setMovementType] = useState('in'); // 'in' (Inward) or 'out' (Outward/Sale)
+            const [movementQuantity, setMovementQuantity] = useState(1);
             
             const [fbLoaded, setFbLoaded] = useState(false);
             const [db, setDb] = useState(null);
@@ -130,7 +136,7 @@
                 }
             }, [fbLoaded, auth]);
 
-            // Real-Time Database Syncing (Fixed Shared Paths)
+            // Real-Time Syncing (Shared across devices)
             useEffect(() => {
                 if (!user || (!isDemoMode && !fbLoaded)) return;
                 
@@ -143,7 +149,6 @@
 
                 if (!db) return;
 
-                // Shared multi-device reference path
                 const inventoryRef = window.FB.collection(db, 'artifacts', appId, 'inventory');
                 const unsubscribeInv = window.FB.onSnapshot(inventoryRef, (snapshot) => {
                     const items = [];
@@ -155,7 +160,6 @@
                     setIsLoading(false);
                 });
 
-                // Shared multi-device reference path
                 const txRef = window.FB.collection(db, 'artifacts', appId, 'transactions');
                 const unsubscribeTx = window.FB.onSnapshot(txRef, (snapshot) => {
                     const txs = [];
@@ -213,122 +217,167 @@
 
             const deleteItem = async (id) => {
                 if (!user) return;
-                if (isDemoMode) {
-                    const newInv = inventory.filter(i => i.id !== id);
-                    setInventory(newInv);
-                    localStorage.setItem('mobistock_inv', JSON.stringify(newInv));
-                } else if (db) {
-                    try {
-                        await window.FB.deleteDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', id));
-                    } catch (err) {
-                        console.error("Delete error:", err);
+                if (confirm("Are you sure you want to delete this item?")) {
+                    if (isDemoMode) {
+                        const newInv = inventory.filter(i => i.id !== id);
+                        setInventory(newInv);
+                        localStorage.setItem('mobistock_inv', JSON.stringify(newInv));
+                    } else if (db) {
+                        try {
+                            await window.FB.deleteDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', id));
+                        } catch (err) {
+                            console.error("Delete error:", err);
+                        }
                     }
                 }
             };
 
+            // Process Stock Inward / Outward (Sales)
+            const handleStockMovement = async (e) => {
+                e.preventDefault();
+                if (!user || !movementItem) return;
+
+                const currentQty = movementItem.quantity || 0;
+                const change = parseInt(movementQuantity) || 0;
+                
+                // Calculate new quantity contextually
+                const newQuantity = movementType === 'in' 
+                    ? currentQty + change 
+                    : Math.max(0, currentQty - change);
+
+                const txData = {
+                    itemId: movementItem.id,
+                    itemName: movementItem.name,
+                    sku: movementItem.sku,
+                    type: movementType,
+                    quantity: change,
+                    price: movementItem.price || 0,
+                    totalValue: change * (movementItem.price || 0),
+                    timestamp: Date.now()
+                };
+
+                if (isDemoMode) {
+                    const newInv = inventory.map(i => i.id === movementItem.id ? { ...i, quantity: newQuantity } : i);
+                    setInventory(newInv);
+                    localStorage.setItem('mobistock_inv', JSON.stringify(newInv));
+
+                    const updatedTxs = [{ id: Date.now().toString(), ...txData }, ...transactions];
+                    setTransactions(updatedTxs);
+                    localStorage.setItem('mobistock_tx', JSON.stringify(updatedTxs));
+                } else if (db) {
+                    try {
+                        // Update stock level
+                        await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'inventory', movementItem.id), { quantity: newQuantity });
+                        // Record transactional history log
+                        await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'transactions', Date.now().toString()), txData);
+                    } catch (err) {
+                        console.error("Stock movement error:", err);
+                    }
+                }
+
+                setIsMovementModalOpen(false);
+                setMovementItem(null);
+                setMovementQuantity(1);
+            };
+
+            // Calculate metrics for Daily Reports
+            const getDailyMetrics = () => {
+                const todayStart = new Date();
+                todayStart.setHours(0, 0, 0, 0);
+                const startTimestamp = todayStart.getTime();
+
+                const todayTx = transactions.filter(t => t.timestamp >= startTimestamp);
+                
+                let totalInward = 0;
+                let totalOutwardSales = 0;
+                let dailyRevenue = 0;
+
+                todayTx.forEach(t => {
+                    if (t.type === 'in') {
+                        totalInward += t.quantity;
+                    } else if (t.type === 'out') {
+                        totalOutwardSales += t.quantity;
+                        dailyRevenue += (t.totalValue || (t.quantity * t.price));
+                    }
+                });
+
+                return {
+                    transactions: todayTx,
+                    totalInward,
+                    totalOutwardSales,
+                    dailyRevenue
+                };
+            };
+
+            const dailyReport = getDailyMetrics();
+            const lowStockCount = inventory.filter(item => item.quantity <= 5).length;
+
             return (
-                <div className="min-h-screen pb-safe">
-                    {/* Header */}
-                    <header className="bg-white border-b border-gray-200 sticky top-0 z-40 px-6 py-4 flex justify-between items-center">
-                        <h1 className="text-2xl font-black text-blue-600 tracking-tight flex items-center gap-2">
-                            <Icon name="Package" className="text-blue-600" /> BhaktiStock
-                        </h1>
+                <div className="min-h-screen pb-safe flex flex-col">
+                    {/* Top Header navbar */}
+                    <header className="bg-white border-b border-gray-200 sticky top-0 z-40 px-6 py-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between shadow-sm">
+                        <div className="flex items-center justify-between">
+                            <h1 className="text-2xl font-black text-blue-600 tracking-tight flex items-center gap-2">
+                                <Icon name="Package" className="text-blue-600" /> BhaktiStock
+                            </h1>
+                        </div>
+                        
+                        {/* Tab Switch Control Elements */}
+                        <div className="flex bg-gray-100 p-1 rounded-xl self-center sm:self-auto">
+                            <button 
+                                onClick={() => setActiveTab('inventory')}
+                                className={`px-4 py-2 font-bold text-sm rounded-lg flex items-center gap-2 transition-all ${activeTab === 'inventory' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
+                            >
+                                <Icon name="Layers" size={16} /> Stock Board
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('report')}
+                                className={`px-4 py-2 font-bold text-sm rounded-lg flex items-center gap-2 transition-all relative ${activeTab === 'report' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
+                            >
+                                <Icon name="TrendingUp" size={16} /> Daily Sales Report
+                            </button>
+                        </div>
+
                         <button 
                             onClick={() => { setCurrentItem(null); setIsItemModalOpen(true); }}
-                            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-xl flex items-center gap-2 transition-all shadow-md active:scale-95"
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-xl flex items-center justify-center gap-2 transition-all shadow-md active:scale-95"
                         >
-                            <Icon name="Plus" size={18} /> Add Item
+                            <Icon name="Plus" size={18} /> Add Product
                         </button>
                     </header>
 
-                    {/* Main Content Area */}
-                    <main className="p-6 max-w-5xl mx-auto">
+                    {/* Quick Metric Ribbon */}
+                    <section className="bg-amber-50 border-b border-amber-200 px-6 py-2 flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-amber-800 text-sm font-medium">
+                            <Icon name="AlertTriangle" size={16} className="text-amber-600" />
+                            <span><strong>{lowStockCount} items</strong> are at or below low stock alert threshold (5 items left).</span>
+                        </div>
+                    </section>
+
+                    {/* Dynamic View rendering switch routing */}
+                    <main className="p-6 max-w-5xl mx-auto w-full flex-grow">
                         {isLoading ? (
                             <div className="flex flex-col items-center justify-center py-20">
                                 <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                                <p className="text-gray-500 font-medium mt-4">Syncing live database...</p>
+                                <p className="text-gray-500 font-medium mt-4">Syncing live cloud database...</p>
                             </div>
-                        ) : inventory.length === 0 ? (
-                            <div className="bg-white border border-dashed border-gray-300 rounded-2xl p-12 text-center">
-                                <Icon name="Inbox" size={48} className="mx-auto text-gray-400 mb-3" />
-                                <h3 className="text-lg font-bold text-gray-700">No stock found</h3>
-                                <p className="text-gray-400 text-sm mb-4">Add your first product to distribute to all devices.</p>
-                            </div>
-                        ) : (
-                            <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
-                                {inventory.map(item => (
-                                    <div key={item.id} className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between">
-                                        <div>
-                                            <div className="flex justify-between items-start mb-2">
-                                                <span className="text-xs bg-blue-50 text-blue-600 font-bold px-2.5 py-1 rounded-lg uppercase tracking-wider">{item.category}</span>
-                                                <div className="flex gap-1">
-                                                    <button onClick={() => { setCurrentItem(item); setIsItemModalOpen(true); }} className="p-1.5 text-gray-500 hover:text-blue-600 rounded-lg hover:bg-gray-100"><Icon name="Edit" size={16} /></button>
-                                                    <button onClick={() => deleteItem(item.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50"><Icon name="Trash2" size={16} /></button>
-                                                </div>
-                                            </div>
-                                            <h3 className="font-bold text-lg text-gray-900 leading-tight">{item.name}</h3>
-                                            <p className="text-xs text-gray-400 font-mono mt-1">SKU: {item.sku} | {item.brand}</p>
-                                        </div>
-                                        <div className="flex justify-between items-baseline mt-6 pt-3 border-t border-gray-100">
-                                            <span className="text-xl font-black text-gray-900">${item.price}</span>
-                                            <span className={`text-sm font-bold ${item.quantity > 5 ? 'text-emerald-600' : 'text-amber-600'}`}>{item.quantity} in stock</span>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </main>
-
-                    {/* Add/Edit Modal */}
-                    {isItemModalOpen && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
-                            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setIsItemModalOpen(false)} />
-                            <form onSubmit={saveItem} className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden animate-slide-up">
-                                <div className="px-6 py-4 flex justify-between items-center border-b border-gray-100">
-                                    <h3 className="text-lg font-bold text-gray-900">{currentItem ? 'Edit Product' : 'Add Product'}</h3>
-                                    <button type="button" onClick={() => setIsItemModalOpen(false)} className="p-2 text-gray-400 hover:text-gray-700 bg-gray-100 rounded-full"><Icon name="X" size={18} /></button>
+                        ) : activeTab === 'inventory' ? (
+                            /* INVENTORY LIST TAB VIEW MODULE */
+                            inventory.length === 0 ? (
+                                <div className="bg-white border border-dashed border-gray-300 rounded-2xl p-12 text-center">
+                                    <Icon name="Inbox" size={48} className="mx-auto text-gray-400 mb-3" />
+                                    <h3 className="text-lg font-bold text-gray-700">No stock found</h3>
+                                    <p className="text-gray-400 text-sm mb-4">Add your first product to distribute configuration to all devices.</p>
                                 </div>
-                                <div className="p-6 space-y-4">
-                                    <div>
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Item Name</label>
-                                        <input name="name" defaultValue={currentItem?.name} required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Brand</label>
-                                            <input name="brand" defaultValue={currentItem?.brand} className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">SKU</label>
-                                            <input name="sku" defaultValue={currentItem?.sku} required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Category</label>
-                                        <input name="category" defaultValue={currentItem?.category} placeholder="e.g., Smartphones" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Price ($)</label>
-                                            <input type="number" step="0.01" name="price" defaultValue={currentItem?.price} required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Quantity</label>
-                                            <input type="number" name="quantity" defaultValue={currentItem?.quantity} required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="px-6 py-4 bg-gray-50 flex justify-end gap-3 border-t border-gray-100">
-                                    <button type="button" onClick={() => setIsItemModalOpen(false)} className="px-4 py-2 text-gray-600 font-semibold hover:bg-gray-200 rounded-xl transition-all">Cancel</button>
-                                    <button type="submit" className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-all shadow-md">Save Product</button>
-                                </div>
-                            </form>
-                        </div>
-                    )}
-                </div>
-            );
-        } // Added missing closing brace for the App function component here
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-                            </script>
+                            ) : (
+                                <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
+                                    {inventory.map(item => {
+                                        const isLowStock = item.quantity <= 5;
+                                        return (
+                                            <div key={item.id} className={`bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between ${isLowStock ? 'border-amber-300 bg-amber-50/20' : 'border-gray-200'}`}>
+                                                <div>
+                                                    <div className="flex justify-between items-start mb-2">
+                                                        <span className="text-xs bg-blue-50 text-blue-600 font-bold px-2.5 py-1 rounded-lg uppercase tracking-wider">{item.category}</span>
+                                                        <div className="flex gap-1">
+                                                            <button onClick={() => { setCurrentItem(item); setIsItemModalOpen(true); }} className="p-1.5 text-gray-500 hover:text-blue-600 rounded-lg hover:bg-gray-100"><Icon name="Edit" size={16} /></button>
+                                                            <button onClick={() => deleteIt
