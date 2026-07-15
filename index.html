@@ -29,13 +29,13 @@
     <div id="root"></div>
 
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Expose Firebase to the global scope for the React app to consume
+        // Expose Firebase to the global scope for the React app to consume safely
         window.FB = {
-            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
+            initializeApp, getApps, getApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
             getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot
         };
     </script>
@@ -74,7 +74,7 @@
             return <span ref={containerRef} className="contents" style={{ display: 'contents' }} />;
         };
 
-        // 🔥 ADD YOUR FIREBASE CONFIGURATION HERE 🔥
+        // 🔥 FIREBASE CONFIGURATION 🔥
         const manualFirebaseConfig = {
             apiKey: "AIzaSyCkWXVNjDVfLk9xllTD3IsXMwnbyvQeNrE",
             authDomain: "bhakti-stock.firebaseapp.com",
@@ -116,17 +116,18 @@
             const [db, setDb] = useState(null);
             const [auth, setAuth] = useState(null);
 
-            // Wait for Firebase module to load globally & Initialize App SAFELY
+            // Wait for Firebase module to load globally & Initialize App SAFELY exactly once
             useEffect(() => {
                 const setupFirebase = () => {
                     if (!isDemoMode && window.FB) {
-                        try {
-                            const app = window.FB.initializeApp(firebaseConfig);
-                            setAuth(window.FB.getAuth(app));
-                            setDb(window.FB.getFirestore(app));
-                        } catch (err) {
-                            console.log("Firebase initialized"); // Catch duplicate app errors silently
+                        let app;
+                        if (window.FB.getApps().length === 0) {
+                            app = window.FB.initializeApp(firebaseConfig);
+                        } else {
+                            app = window.FB.getApp();
                         }
+                        setAuth(window.FB.getAuth(app));
+                        setDb(window.FB.getFirestore(app));
                     }
                     setFbLoaded(true);
                 };
@@ -204,8 +205,11 @@
                     const items = [];
                     snapshot.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
                     setInventory(items);
-                    setIsLoading(false);
-                }, (error) => console.error("Inventory error:", error));
+                    setIsLoading(false); // Stop loading on success
+                }, (error) => {
+                    console.error("Inventory error (Check Firestore Rules!):", error);
+                    setIsLoading(false); // Stop loading even if it fails!
+                });
 
                 const txRef = window.FB.collection(db, 'artifacts', appId, 'users', user.uid, 'transactions');
                 const unsubscribeTx = window.FB.onSnapshot(txRef, (snapshot) => {
@@ -213,7 +217,9 @@
                     snapshot.forEach(doc => txs.push({ id: doc.id, ...doc.data() }));
                     txs.sort((a, b) => b.timestamp - a.timestamp); 
                     setTransactions(txs);
-                }, (error) => console.error("Transactions error:", error));
+                }, (error) => {
+                    console.error("Transactions error:", error);
+                });
 
                 return () => {
                     unsubscribeInv && unsubscribeInv();
@@ -248,8 +254,13 @@
                 }
 
                 if (db) {
-                    for (const item of samples) {
-                        await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', item.id), item);
+                    try {
+                        for (const item of samples) {
+                            await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', item.id), item);
+                        }
+                    } catch (err) {
+                        console.error("Could not save sample data. Please check your Firestore Security rules.");
+                        alert("Database save failed. Ensure Firestore rules allow read/write!");
                     }
                 }
                 setIsLoading(false);
@@ -279,11 +290,15 @@
                     setInventory(newInv);
                     localStorage.setItem('mobistock_inv', JSON.stringify(newInv));
                 } else if (db) {
-                    if (currentItem) {
-                        await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', currentItem.id), itemData);
-                    } else {
-                        const newId = Date.now().toString();
-                        await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', newId), { id: newId, ...itemData });
+                    try {
+                        if (currentItem) {
+                            await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', currentItem.id), itemData);
+                        } else {
+                            const newId = Date.now().toString();
+                            await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', newId), { id: newId, ...itemData });
+                        }
+                    } catch (err) {
+                        console.error("Save error:", err);
                     }
                 }
                 setIsItemModalOpen(false);
@@ -297,7 +312,11 @@
                     setInventory(newInv);
                     localStorage.setItem('mobistock_inv', JSON.stringify(newInv));
                 } else if (db) {
-                    await window.FB.deleteDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', id));
+                    try {
+                        await window.FB.deleteDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', id));
+                    } catch (err) {
+                        console.error("Delete error:", err);
+                    }
                 }
                 setActiveMenuId(null);
             };
@@ -324,11 +343,15 @@
                     setTransactions(updatedTxs);
                     localStorage.setItem('mobistock_tx', JSON.stringify(updatedTxs));
                 } else if (db) {
-                    await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', item.id), { quantity: newQuantity });
-                    await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'transactions', Date.now().toString()), {
-                        itemId: item.id, itemName: item.name, sku: item.sku,
-                        type: movementType, quantity: movementQuantity, price: item.price || 0, timestamp: Date.now()
-                    });
+                    try {
+                        await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'inventory', item.id), { quantity: newQuantity });
+                        await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'transactions', Date.now().toString()), {
+                            itemId: item.id, itemName: item.name, sku: item.sku,
+                            type: movementType, quantity: movementQuantity, price: item.price || 0, timestamp: Date.now()
+                        });
+                    } catch (err) {
+                        console.error("Movement error:", err);
+                    }
                 }
 
                 setIsMovementModalOpen(false); 
