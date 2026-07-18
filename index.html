@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>BhaktiStock - Admin Portal</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom Utility Classes */
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+        
+        /* Animations */
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+        .animate-slide-up { animation: slideUp 0.3s ease-out forwards; }
+    </style>
+
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body class="bg-gray-100 font-sans text-gray-900 selection:bg-blue-200">
+    <div id="root"></div>
+
+    <script type="module">
+        import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.FB = {
+            initializeApp, getApps, getApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signInWithEmailAndPassword, signOut,
+            getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot
+        };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const Icon = ({ name, size = 24, className = "" }) => {
+            const containerRef = useRef(null);
+            
+            useEffect(() => {
+                if (!containerRef.current || !window.lucide) return;
+                let kebabName = name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+                if (kebabName.endsWith('-2')) {
+                    kebabName = kebabName.replace('-2', '');
+                }
+                containerRef.current.innerHTML = `<i data-lucide="${kebabName}"></i>`;
+                window.lucide.createIcons({
+                    root: containerRef.current,
+                    attrs: { width: size, height: size, class: className }
+                });
+            }, [name, size, className]);
+            
+            return <span ref={containerRef} className="contents" style={{ display: 'contents' }} />;
+        };
+
+        const manualFirebaseConfig = {
+            apiKey: "AIzaSyCkWXVNjDVfLk9xllTD3IsXMwnbyvQeNrE",
+            authDomain: "bhakti-stock.firebaseapp.com",
+            projectId: "bhakti-stock",
+            storageBucket: "bhakti-stock.firebasestorage.app",
+            messagingSenderId: "1027335051516",
+            appId: "1:1027335051516:web:46fb07f9f744ec12a69f79",
+            measurementId: "G-T2P45ZE381"
+        };
+
+        let firebaseConfig = manualFirebaseConfig;
+        if (typeof __firebase_config !== "undefined" && __firebase_config) {
+            try {
+                firebaseConfig = typeof __firebase_config === "string" ? JSON.parse(__firebase_config) : __firebase_config;
+            } catch (e) {
+                console.error("Config parse ignored:", e);
+            }
+        }
+        
+        const appId = typeof __app_id !== "undefined" ? __app_id : "mobistock-default";
+        const isDemoMode = firebaseConfig.apiKey === "YOUR_API_KEY_HERE" || !firebaseConfig.apiKey;
+
+        function App() {
+            const [inventory, setInventory] = useState([]);
+            const [transactions, setTransactions] = useState([]);
+            const [user, setUser] = useState(null);
+            const [isLoading, setIsLoading] = useState(true);
+            const [activeTab, setActiveTab] = useState('inventory'); 
+            const [syncMessage, setSyncMessage] = useState(null);
+            const [isError, setIsError] = useState(false);
+            
+            // Modal States
+            const [isItemModalOpen, setIsItemModalOpen] = useState(false);
+            const [currentItem, setCurrentItem] = useState(null);
+            const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+
+            // Movement States
+            const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
+            const [movementItem, setMovementItem] = useState(null);
+            const [movementType, setMovementType] = useState('in'); 
+            const [movementQuantity, setMovementQuantity] = useState(1);
+
+            // Auth States
+            const [loginError, setLoginError] = useState('');
+            const [isLoggingIn, setIsLoggingIn] = useState(false);
+            
+            const [fbLoaded, setFbLoaded] = useState(false);
+            const [db, setDb] = useState(null);
+            const [auth, setAuth] = useState(null);
+
+            const displayMessage = (msg, isErrorStatus = false) => {
+                setSyncMessage(msg);
+                setIsError(isErrorStatus);
+                setTimeout(() => setSyncMessage(null), 5000);
+            };
+
+            // Initialize Firebase App
+            useEffect(() => {
+                const setupFirebase = () => {
+                    if (!isDemoMode && window.FB) {
+                        let app = window.FB.getApps().length === 0 ? window.FB.initializeApp(firebaseConfig) : window.FB.getApp();
+                        setAuth(window.FB.getAuth(app));
+                        setDb(window.FB.getFirestore(app));
+                    }
+                    setFbLoaded(true);
+                };
+                if (window.FB) setupFirebase();
+                else {
+                    const timer = setInterval(() => {
+                        if (window.FB) { setupFirebase(); clearInterval(timer); }
+                    }, 50);
+                    return () => clearInterval(timer);
+                }
+            }, []);
+
+            // Strict Pre-Awaited Auth Initialization Pattern
+            useEffect(() => {
+                if (!fbLoaded) return;
+                if (isDemoMode) { 
+                    setUser({ uid: 'local-demo-user', isAnonymous: true }); 
+                    setIsLoading(false); 
+                    return; 
+                }
+
+                if (window.FB && auth) {
+                    const initAuth = async () => {
+                        try {
+                            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                                await window.FB.signInWithCustomToken(auth, __initial_auth_token);
+                            } else {
+                                await window.FB.signInAnonymously(auth);
+                            }
+                        } catch (err) {
+                            console.error("Auth init failure:", err);
+                        }
+                    };
+                    initAuth();
+
+                    const unsubscribe = window.FB.onAuthStateChanged(auth, (currentUser) => {
+                        setUser(currentUser);
+                        setIsLoading(false);
+                    });
+                    return () => unsubscribe();
+                }
+            }, [fbLoaded, auth]);
+
+            // Database Live Sync with strict public/data paths
+            useEffect(() => {
+                if (!user || user.isAnonymous || (!isDemoMode && !fbLoaded)) return;
+                
+                if (isDemoMode) {
+                    setInventory(JSON.parse(localStorage.getItem('mobistock_inv') || '[]'));
+                    setTransactions(JSON.parse(localStorage.getItem('mobistock_tx') || '[]'));
+                    setIsLoading(false);
+                    return;
+                }
+
+                if (!db) return;
+                setSyncMessage(null);
+
+                // STRICT PUBLIC/DATA PATH ENFORCEMENT
+                const inventoryRef = window.FB.collection(db, 'artifacts', appId, 'public', 'data', 'inventory');
+                const unsubscribeInv = window.FB.onSnapshot(inventoryRef, (snapshot) => {
+                    const items = [];
+                    snapshot.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
+                    setInventory(items);
+                    setIsLoading(false);
+                }, (error) => {
+                    console.error("Inventory sync broken:", error);
+                    displayMessage("Database sync error. Check your Firebase Rules.", true);
+                    setIsLoading(false);
+                });
+
+                const txRef = window.FB.collection(db, 'artifacts', appId, 'public', 'data', 'transactions');
+                const unsubscribeTx = window.FB.onSnapshot(txRef, (snapshot) => {
+                    const txs = [];
+                    snapshot.forEach(doc => txs.push({ id: doc.id, ...doc.data() }));
+                    txs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)); 
+                    setTransactions(txs);
+                }, (error) => {
+                    console.error("Transactions tracking broken:", error);
+                });
+
+                return () => {
+                    unsubscribeInv && unsubscribeInv();
+                    unsubscribeTx && unsubscribeTx();
+                };
+            }, [user, db, fbLoaded]);
+
+            // Handlers
+            const handleAdminLogin = async (e) => {
+                e.preventDefault();
+                setLoginError('');
+                setIsLoggingIn(true);
+
+                const formData = new FormData(e.target);
+                const email = formData.get('email');
+                const password = formData.get('password');
+
+                if (isDemoMode) {
+                    if (email === 'admin@bhaktistock.com' && password === 'admin123') {
+                        setUser({ uid: 'demo-admin-uid', email: email, isAnonymous: false });
+                    } else {
+                        setLoginError('Invalid credentials! Hint: Use admin@bhaktistock.com and admin123');
+                    }
+                    setIsLoggingIn(false);
+                    return;
+                }
+
+                if (window.FB && auth) {
+                    try {
+                        await window.FB.signInWithEmailAndPassword(auth, email, password);
+                    } catch (err) {
+                        setLoginError('Access Denied. Check your admin credentials.');
+                    } finally {
+                        setIsLoggingIn(false);
+                    }
+                }
+            };
+
+            const handleAdminLogout = async () => {
+                setIsLoading(true);
+                if (isDemoMode) {
+                    setUser({ uid: 'local-demo-user', isAnonymous: true });
+                    setInventory([]);
+                    setTransactions([]);
+                    setIsLoading(false);
+                    return;
+                }
+                if (window.FB && auth) {
+                    await window.FB.signOut(auth);
+                }
+            };
+
+            const saveItem = async (e) => {
+                e.preventDefault();
+                if (!user || user.isAnonymous) return;
+                
+                const formData = new FormData(e.target);
+                const itemData = {
+                    name: formData.get('name'),
+                    brand: formData.get('brand'),
+                    sku: formData.get('sku'),
+                    category: formData.get('category'),
+                    price: parseFloat(formData.get('price')) || 0,
+                    quantity: parseInt(formData.get('quantity')) || 0,
+                };
+
+                try {
+                    if (isDemoMode) {
+                        let newInv = [...inventory];
+                        if (currentItem) {
+                            newInv = newInv.map(i => i.id === currentItem.id ? { ...i, ...itemData, quantity: i.quantity } : i);
+                        } else {
+                            newInv.push({ id: Date.now().toString(), ...itemData });
+                        }
+                        setInventory(newInv);
+                        localStorage.setItem('mobistock_inv', JSON.stringify(newInv));
+                    } else if (db) {
+                        if (currentItem) {
+                            const { quantity, ...updateFields } = itemData; // Prevent overwrite
+                            await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'public', 'data', 'inventory', currentItem.id), updateFields);
+                        } else {
+                            const newId = Date.now().toString();
+                            await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'public', 'data', 'inventory', newId), { id: newId, ...itemData });
+                        }
+                    }
+                    
+                    setIsItemModalOpen(false);
+                    setCurrentItem(null);
+                    displayMessage(currentItem ? "Item updated successfully." : "New item created.", false);
+                    
+                } catch (error) {
+                    console.error("Database Write Error:", error);
+                    displayMessage(`Failed to save: ${error.message}`, true);
+                }
+            };
+
+            const executeDelete = async () => {
+                if (!user || user.isAnonymous || !deleteConfirmId) return;
+                const id = deleteConfirmId;
+
+                try {
+                    if (isDemoMode) {
+                        const newInv = inventory.filter(i => i.id !== id);
+                        setInventory(newInv);
+                        localStorage.setItem('mobistock_inv', JSON.stringify(newInv));
+                    } else if (db) {
+                        await window.FB.deleteDoc(window.FB.doc(db, 'artifacts', appId, 'public', 'data', 'inventory', id));
+                    }
+                    setDeleteConfirmId(null);
+                    displayMessage("Product removed from database.", false);
+                } catch (error) {
+                    console.error("Database Delete Error:", error);
+                    displayMessage(`Failed to delete: ${error.message}`, true);
+                }
+            };
+
+            const handleStockMovement = async (e) => {
+                e.preventDefault();
+                if (!user || user.isAnonymous || !movementItem) return;
+
+                const liveFreshItem = inventory.find(i => i.id === movementItem.id);
+                const currentQty = liveFreshItem ? (liveFreshItem.quantity || 0) : (movementItem.quantity || 0);
+                
+                const change = parseInt(movementQuantity) || 0;
+                const newQuantity = movementType === 'in' ? currentQty + change : Math.max(0, currentQty - change);
+
+                const txData = {
+                    itemId: movementItem.id,
+                    itemName: movementItem.name,
+                    sku: movementItem.sku,
+                    type: movementType,
+                    quantity: change,
+                    price: movementItem.price || 0,
+                    totalValue: change * (movementItem.price || 0),
+                    timestamp: Date.now()
+                };
+
+                try {
+                    if (isDemoMode) {
+                        const newInv = inventory.map(i => i.id === movementItem.id ? { ...i, quantity: newQuantity } : i);
+                        setInventory(newInv);
+                        localStorage.setItem('mobistock_inv', JSON.stringify(newInv));
+
+                        const updatedTxs = [{ id: Date.now().toString(), ...txData }, ...transactions];
+                        setTransactions(updatedTxs);
+                        localStorage.setItem('mobistock_tx', JSON.stringify(updatedTxs));
+                    } else if (db) {
+                        await window.FB.updateDoc(window.FB.doc(db, 'artifacts', appId, 'public', 'data', 'inventory', movementItem.id), { quantity: newQuantity });
+                        await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'public', 'data', 'transactions', Date.now().toString()), txData);
+                    }
+
+                    setIsMovementModalOpen(false);
+                    setMovementItem(null);
+                    setMovementQuantity(1);
+                    displayMessage("Stock movement registered.", false);
+                } catch (error) {
+                    console.error("Database Movement Error:", error);
+                    displayMessage(`Failed to update stock: ${error.message}`, true);
+                }
+            };
+
+            const getDailyMetrics = () => {
+                const todayStart = new Date();
+                todayStart.setHours(0, 0, 0, 0);
+                const startTimestamp = todayStart.getTime();
+
+                const todayTx = transactions.filter(t => (t.timestamp || 0) >= startTimestamp);
+                let totalInward = 0, totalOutwardSales = 0, dailyRevenue = 0;
+
+                todayTx.forEach(t => {
+                    if (t.type === 'in') totalInward += t.quantity;
+                    else if (t.type === 'out') {
+                        totalOutwardSales += t.quantity;
+                        dailyRevenue += (t.totalValue || (t.quantity * t.price) || 0);
+                    }
+                });
+
+                return { transactions: todayTx, totalInward, totalOutwardSales, dailyRevenue };
+            };
+
+            const dailyReport = getDailyMetrics();
+            const lowStockCount = inventory.filter(item => item.quantity <= 5).length;
+
+            const exportToExcel = () => {
+                if (dailyReport.transactions.length === 0) {
+                    displayMessage("No operation logs captured for today to export.", true);
+                    return;
+                }
+
+                const excelRows = dailyReport.transactions.map((tx) => ({
+                    "Timestamp": new Date(tx.timestamp).toLocaleTimeString(),
+                    "Product Name": tx.itemName,
+                    "SKU Reference Code": tx.sku,
+                    "Action Type": tx.type === 'in' ? 'Inward Ingest' : 'Outward Sale',
+                    "Delta Quantity": tx.quantity,
+                    "Unit Cost ($)": tx.price,
+                    "Total Value ($)": parseFloat((tx.totalValue || (tx.quantity * tx.price)).toFixed(2))
+                }));
+
+                excelRows.push({}); 
+                excelRows.push({ "Timestamp": "SUMMARY DATA LEDGER" });
+                excelRows.push({ "Timestamp": "Total Combined Daily Revenue ($)", "Product Name": parseFloat(dailyReport.dailyRevenue.toFixed(2)) });
+                excelRows.push({ "Timestamp": "Total Volume Sold Outward (Units)", "Product Name": dailyReport.totalOutwardSales });
+                excelRows.push({ "Timestamp": "Total Volume Ingested Inward (Units)", "Product Name": dailyReport.totalInward });
+
+                const worksheet = XLSX.utils.json_to_sheet(excelRows);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, worksheet, "Daily Ledger Feed");
+
+                const todayString = new Date().toISOString().split('T')[0];
+                XLSX.writeFile(workbook, `BhaktiStock_Daily_Report_${todayString}.xlsx`);
+            };
+
+            if (isLoading) {
+                return (
+                    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center">
+                        <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                        <p className="text-gray-500 font-bold mt-4 tracking-wide">Authenticating System Access...</p>
+                    </div>
+                );
+            }
+
+            if (!user || user.isAnonymous) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-blue-50 to-gray-100">
+                        <div className="w-full max-w-md bg-white rounded-3xl shadow-xl border border-gray-100 p-8 space-y-6 animate-fade-in">
+                            <div className="text-center space-y-2">
+                                <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center mx-auto shadow-sm">
+                                    <Icon name="Lock" size={32} />
+                                </div>
+                                <h2 className="text-2xl font-black text-gray-900 tracking-tight">BhaktiStock Admin</h2>
+                                <p className="text-gray-400 text-sm">Please sign in below to open the real-time stock matrix dashboard.</p>
+                            </div>
+
+                            {loginError && (
+                                <div className="p-4 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl flex items-center gap-2">
+                                    <Icon name="AlertCircle" size={16} className="text-red-500 shrink-0" />
+                                    <span>{loginError}</span>
+                                </div>
+                            )}
+
+                            <form onSubmit={handleAdminLogin} className="space-y-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Admin Email Address</label>
+                                    <div className="relative">
+                                        <span className="absolute left-4 top-3.5 text-gray-400"><Icon name="Mail" size={18} /></span>
+                                        <input type="email" name="email" required placeholder="admin@business.com" className="w-full pl-12 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-medium transition-all" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Administrative Passphrase</label>
+                                    <div className="relative">
+                                        <span className="absolute left-4 top-3.5 text-gray-400"><Icon name="Key" size={18} /></span>
+                                        <input type="password" name="password" required placeholder="••••••••" className="w-full pl-12 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-medium transition-all" />
+                                    </div>
+                                </div>
+                                <button type="submit" disabled={isLoggingIn} className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-bold py-3.5 rounded-xl transition-all shadow-md active:scale-[0.99] flex items-center justify-center gap-2 text-sm">
+                                    {isLoggingIn ? 'Verifying Admin Authority...' : 'Unlock System Access'}
+                                </button>
+                            </form>
+
+                            {isDemoMode && (
+                                <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-amber-800 text-xs space-y-1">
+                                    <p className="font-bold uppercase tracking-wider flex items-center gap-1"><Icon name="Info" size={14} /> Sandbox Environment Active</p>
+                                    <p>Log in using: <strong>admin@bhaktistock.com</strong> / Pass: <strong>admin123</strong></p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen pb-safe flex flex-col">
+                    <header className="bg-white border-b border-gray-200 sticky top-0 z-40 px-6 py-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between shadow-sm">
+                        <div className="flex items-center justify-between">
+                            <h1 className="text-2xl font-black text-blue-600 tracking-tight flex items-center gap-2">
+                                <Icon name="Package" className="text-blue-600" /> BhaktiStock <span className="text-xs bg-blue-100 text-blue-700 py-0.5 px-2 font-bold rounded-md uppercase tracking-wide">Admin Portal</span>
+                            </h1>
+                        </div>
+                        
+                        <div className="flex bg-gray-100 p-1 rounded-xl self-center sm:self-auto">
+                            <button 
+                                onClick={() => setActiveTab('inventory')}
+                                className={`px-4 py-2 font-bold text-sm rounded-lg flex items-center gap-2 transition-all ${activeTab === 'inventory' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
+                            >
+                                <Icon name="Layers" size={16} /> Stock Matrix
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('report')}
+                                className={`px-4 py-2 font-bold text-sm rounded-lg flex items-center gap-2 transition-all relative ${activeTab === 'report' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
+                            >
+                                <Icon name="TrendingUp" size={16} /> Sales Ledger Report
+                            </button>
+                        </div>
+
+                        <div className="flex items-center gap-2 justify-center">
+                            <button 
+                                onClick={() => { setCurrentItem(null); setIsItemModalOpen(true); }}
+                                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-xl flex items-center justify-center gap-2 transition-all shadow-md active:scale-95 text-sm"
+                            >
+                                <Icon name="Plus" size={18} /> Add Product Entry
+                            </button>
+                            <button 
+                                onClick={handleAdminLogout}
+                                title="Lock Session Profile"
+                                className="bg-gray-100 hover:bg-gray-200 text-gray-600 p-2 rounded-xl border border-gray-200 transition-all active:scale-95"
+                            >
+                                <Icon name="LogOut" size={18} />
+                            </button>
+                        </div>
+                    </header>
+
+                    {syncMessage && (
+                        <div className={`border-b text-sm font-bold px-6 py-3 flex items-center justify-between animate-fade-in ${isError ? 'bg-red-50 border-red-200 text-red-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
+                            <div className="flex items-center gap-2">
+                                <Icon name={isError ? "AlertCircle" : "CheckCircle"} size={16} className={`shrink-0 ${isError ? 'text-red-600' : 'text-emerald-600'}`} />
+                                <span>{syncMessage}</span>
+                            </div>
+                            <button onClick={() => setSyncMessage(null)}><Icon name="X" size={16}/></button>
+                        </div>
+                    )}
+
+                    {lowStockCount > 0 && (
+                        <section className="bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-center justify-between animate-fade-in">
+                            <div className="flex items-center gap-2 text-amber-900 text-xs sm:text-sm font-medium">
+                                <Icon name="AlertTriangle" size={16} className="text-amber-600 shrink-0" />
+                                <span>Attention Admin: <strong>{lowStockCount} items</strong> are at critical low stock thresholds (&le; 5 units). Replenish inventory records immediately.</span>
+                            </div>
+                        </section>
+                    )}
+
+                    <main className="p-6 max-w-5xl mx-auto w-full flex-grow">
+                        {activeTab === 'inventory' ? (
+                            inventory.length === 0 ? (
+                                <div className="bg-white border border-dashed border-gray-300 rounded-2xl p-12 text-center">
+                                    <Icon name="Inbox" size={48} className="mx-auto text-gray-400 mb-3" />
+                                    <h3 className="text-lg font-bold text-gray-700">Database Empty</h3>
+                                    <p className="text-gray-400 text-sm mb-4">No active catalog tracking keys identified inside cluster.</p>
+                                </div>
+                            ) : (
+                                <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
+                                    {inventory.map(item => {
+                                        const isLowStock = item.quantity <= 5;
+                                        return (
+                                            <div key={item.id} className={`bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between ${isLowStock ? 'border-amber-300 bg-amber-50/10' : 'border-gray-200'}`}>
+                                                <div>
+                                                    <div className="flex justify-between items-start mb-2">
+                                                        <span className="text-xs bg-blue-50 text-blue-600 font-bold px-2.5 py-1 rounded-lg uppercase tracking-wider">{item.category}</span>
+                                                        <div className="flex gap-1">
+                                                            <button onClick={() => { setCurrentItem(item); setIsItemModalOpen(true); }} className="p-1.5 text-gray-500 hover:text-blue-600 rounded-lg hover:bg-gray-100"><Icon name="Edit" size={16} /></button>
+                                                            <button onClick={() => setDeleteConfirmId(item.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50"><Icon name="Trash2" size={16} /></button>
+                                                        </div>
+                                                    </div>
+                                                    <h3 className="font-bold text-lg text-gray-900 leading-tight flex items-center gap-1.5">
+                                                        {item.name}
+                                                        {isLowStock && <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>}
+                                                    </h3>
+                                                    <p className="text-xs text-gray-400 font-mono mt-1">SKU: {item.sku} | {item.brand}</p>
+                                                </div>
+                                                
+                                                <div className="mt-6 pt-3 border-t border-gray-100 flex items-center justify-between gap-2">
+                                                    <div className="flex flex-col">
+                                                        <span className="text-xl font-black text-gray-900">${item.price}</span>
+                                                        <span className={`text-xs font-bold ${isLowStock ? 'text-amber-600' : 'text-emerald-600'}`}>
+                                                            {item.quantity} units {isLowStock ? '(Restock Required)' : 'in warehouse'}
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex gap-1">
+                                                        <button 
+                                                            onClick={() => { setMovementItem(item); setMovementType('in'); setIsMovementModalOpen(true); }}
+                                                            className="px-2.5 py-1.5 text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 rounded-lg flex items-center gap-0.5"
+                                                        >
+                                                            <Icon name="ArrowDownLeft" size={14} /> Inward
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => { setMovementItem(item); setMovementType('out'); setIsMovementModalOpen(true); }}
+                                                            className="px-2.5 py-1.5 text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 rounded-lg flex items-center gap-0.5"
+                                                        >
+                                                            <Icon name="ArrowUpRight" size={14} /> Sale Out
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )
+                        ) : (
+                            /* SALES REPORT DASHBOARD CARD HISTORY VIEW */
+                            <div className="space-y-6 animate-fade-in">
+                                <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+                                    <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm flex items-center gap-4">
+                                        <div className="p-3 bg-blue-50 text-blue-600 rounded-xl"><Icon name="DollarSign" /></div>
+                                        <div>
+                                            <p className="text-xs font-bold text-gray-400 uppercase">Today's Revenue Gross</p>
+                                            <h4 className="text-2xl font-black text-gray-900">${dailyReport.dailyRevenue.toFixed(2)}</h4>
+                                        </div>
+                                    </div>
+                                    <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm flex items-center gap-4">
+                                        <div className="p-3 bg-amber-50 text-amber-600 rounded-xl"><Icon name="TrendingDown" /></div>
+                                        <div>
+                                            <p className="text-xs font-bold text-gray-400 uppercase">Sales Velocity Out</p>
+                                            <h4 className="text-2xl font-black text-gray-900">{dailyReport.totalOutwardSales} units</h4>
+                                        </div>
+                                    </div>
+                                    <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm flex items-center gap-4">
+                                        <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl"><Icon name="TrendingUp" /></div>
+                                        <div>
+                                            <p className="text-xs font-bold text-gray-400 uppercase">Inward Stock Ingested</p>
+                                            <h4 className="text-2xl font-black text-gray-900">{dailyReport.totalInward} units</h4>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+                                    <div className="px-6 py-4 border-b border-gray-100 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                        <div>
+                                            <h3 className="font-bold text-gray-900">Administrative Operation Audit Logs</h3>
+                                            <p className="text-xs text-gray-400 font-medium">Real-time update synchronization node active</p>
+                                        </div>
+                                        
+                                        <button 
+                                            onClick={exportToExcel}
+                                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition-all shadow-sm active:scale-95 flex items-center justify-center gap-1.5 self-start sm:self-auto"
+                                        >
+                                            <Icon name="FileSpreadsheet" size={16} /> Export to Excel (.xlsx)
+                                        </button>
+                                    </div>
+                                    
+                                    {dailyReport.transactions.length === 0 ? (
+                                        <div className="p-8 text-center text-gray-400 text-sm">
+                                            No business events captured inside current calendar day interval.
+                                        </div>
+                                    ) : (
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-left border-collapse text-sm">
+                                                <thead>
+                                                    <tr className="bg-gray-50 text-gray-500 font-bold border-b border-gray-100">
+                                                        <th className="p-4">Timestamp</th>
+                                                        <th className="p-4">Resource Info</th>
+                                                        <th className="p-4">Action Channel</th>
+                                                        <th className="p-4 text-center">Delta Qty</th>
+                                                        <th className="p-4 text-right">MSRP Cost</th>
+                                                        <th className="p-4 text-right">Gross Transacted</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-100">
+                                                    {dailyReport.transactions.map((tx) => (
+                                                        <tr key={tx.id} className="hover:bg-gray-50/50 transition-colors">
+                                                            <td className="p-4 font-mono text-xs text-gray-400">
+                                                                {new Date(tx.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                                            </td>
+                                                            <td className="p-4">
+                                                                <div className="font-bold text-gray-900">{tx.itemName}</div>
+                                                                <div className="text-xs text-gray-400 font-mono">SKU: {tx.sku}</div>
+                                                            </td>
+                                                            <td className="p-4">
+                                                                <span className={`inline-block px-2 py-0.5 rounded-md font-bold text-xs uppercase ${tx.type === 'in' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-blue-50 text-blue-700 border border-blue-100'}`}>
+                                                                    {tx.type === 'in' ? 'Inward Ingest' : 'Outward Sale'}
+                                                                </span>
+                                                            </td>
+                                                            <td className="p-4 text-center font-bold">{tx.quantity}</td>
+                                                            <td className="p-4 text-right font-mono text-gray-500">${tx.price}</td>
+                                                            <td className="p-4 text-right font-bold text-gray-900 font-mono">
+                                                                ${(tx.totalValue || (tx.quantity * tx.price)).toFixed(2)}
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Delete Confirmation Safe UI Dialog */}
+                    {deleteConfirmId && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
+                            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setDeleteConfirmId(null)} />
+                            <div className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl p-6 text-center animate-slide-up">
+                                <div className="w-16 h-16 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-red-100 shadow-sm">
+                                    <Icon name="AlertTriangle" size={32} />
+                                </div>
+                                <h3 className="text-xl font-black text-gray-900 mb-2">Delete Product?</h3>
+                                <p className="text-gray-500 text-sm mb-6 leading-relaxed">This action cannot be undone. Are you sure you want to completely remove this entry from the database?</p>
+                                <div className="flex justify-center gap-3">
+                                    <button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-3 text-gray-700 font-bold bg-gray-100 hover:bg-gray-200 rounded-xl transition-all">Cancel</button>
+                                    <button onClick={executeDelete} className="flex-1 py-3 text-white font-bold bg-red-600 hover:bg-red-700 rounded-xl transition-all shadow-md">Confirm</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {isMovementModalOpen && movementItem && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
+                            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setIsMovementModalOpen(false)} />
+                            <form onSubmit={handleStockMovement} className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden animate-slide-up">
+                                <div className="px-6 py-4 flex justify-between items-center border-b border-gray-100">
+                                    <h3 className="text-lg font-bold text-gray-900">
+                                        Stock Quantity {movementType === 'in' ? 'Replenishment' : 'Disbursement'}
+                                    </h3>
+                                    <button type="button" onClick={() => setIsMovementModalOpen(false)} className="p-2 text-gray-400 hover:text-gray-700 bg-gray-100 rounded-full"><Icon name="X" size={18} /></button>
+                                </div>
+                                <div className="p-6 space-y-4">
+                                    <div className="bg-gray-50 p-3 rounded-xl border border-gray-200">
+                                        <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">Target Resource SKU Node</p>
+                                        <h4 className="font-bold text-gray-900">{movementItem.name}</h4>
+                                        <p className="text-xs text-gray-500 mt-0.5">Active Catalog Level: <strong>{
+                                            (inventory.find(i => i.id === movementItem.id)?.quantity || 0)
+                                        } items</strong></p>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Operational Delta Quantity</label>
+                                        <input 
+                                            type="number" 
+                                            min="1" 
+                                            value={movementQuantity}
+                                            onChange={(e) => setMovementQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                                            required 
+                                            className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-center font-black text-xl text-blue-600 focus:ring-2 focus:ring-blue-500 outline-none" 
+                                        />
+                                    </div>
+                                </div>
+                                <div className="px-6 py-4 bg-gray-50 flex justify-end gap-3 border-t border-gray-100">
+                                    <button type="button" onClick={() => setIsMovementModalOpen(false)} className="px-4 py-2 text-gray-600 font-semibold hover:bg-gray-200 rounded-xl transition-all">Cancel</button>
+                                    <button type="submit" className={`px-5 py-2 text-white font-semibold rounded-xl transition-all shadow-md ${movementType === 'in' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                                        Execute Registry Delta
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    )}
+
+                    {isItemModalOpen && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
+                            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setIsItemModalOpen(false)} />
+                            <form onSubmit={saveItem} className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden animate-slide-up">
+                                <div className="px-6 py-4 flex justify-between items-center border-b border-gray-100">
+                                    <h3 className="text-lg font-bold text-gray-900">{currentItem ? 'Modify Item Properties' : 'Initialize New Entry'}</h3>
+                                    <button type="button" onClick={() => setIsItemModalOpen(false)} className="p-2 text-gray-400 hover:text-gray-700 bg-gray-100 rounded-full"><Icon name="X" size={18} /></button>
+                                </div>
+                                <div className="p-6 space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Item Label Header</label>
+                                        <input name="name" defaultValue={currentItem?.name} required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Brand Owner</label>
+                                            <input name="brand" defaultValue={currentItem?.brand} className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">SKU Tag String</label>
+                                            <input name="sku" defaultValue={currentItem?.sku} required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Category Domain</label>
+                                        <input name="category" defaultValue={currentItem?.category} placeholder="e.g., Electronics, Audio" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Unit Valuation Base ($)</label>
+                                            <input type="number" step="0.01" name="price" defaultValue={currentItem?.price} required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                                        </div>
+                                        {!currentItem && (
+                                            <div>
+                                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Initial Allocation Qty</label>
+                                                <input type="number" name="quantity" defaultValue={0} required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="px-6 py-4 bg-gray-50 flex justify-end gap-3 border-t border-gray-100">
+                                    <button type="button" onClick={() => setIsItemModalOpen(false)} className="px-4 py-2 text-gray-600 font-semibold hover:bg-gray-200 rounded-xl transition-all">Cancel</button>
+                                    <button type="submit" className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-all shadow-md">Commit Database Entries</button>
+                                </div>
+                            </form>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
